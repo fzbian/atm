@@ -1,0 +1,415 @@
+basePath: /
+definitions:
+  models.CajaOdoo:
+    properties:
+      id:
+        type: integer
+      locales:
+        additionalProperties:
+          format: float64
+          type: number
+        type: object
+      saldo_caja:
+        type: number
+      saldo_total:
+        type: number
+      total_locales:
+        type: number
+      ultima_actualizacion:
+        type: string
+    type: object
+  models.Categoria:
+    properties:
+      created_at:
+        type: string
+      id:
+        type: integer
+      nombre:
+        type: string
+      tipo:
+        type: string
+    type: object
+  models.Transaccion:
+    properties:
+      categoria_id:
+        type: integer
+      descripcion:
+        type: string
+      fecha:
+        type: string
+      id:
+        type: integer
+      monto:
+        type: number
+    type: object
+  models.TransaccionCreateInput:
+    properties:
+      categoria_id:
+        type: integer
+      descripcion:
+        type: string
+      monto:
+        type: number
+    required:
+    - categoria_id
+    - descripcion
+    - monto
+    type: object
+  models.TransaccionUpdateInput:
+    properties:
+      categoria_id:
+        type: integer
+      descripcion:
+        type: string
+      monto:
+        type: number
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: soporte@example.com
+    name: Soporte
+  description: API para gestionar categorias, transacciones, caja y logs. Documentación
+    generada con swaggo.
+  title: ATM API
+  version: "1.0"
+paths:
+  /api/caja:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.CajaOdoo'
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Obtener saldo en caja (desde Odoo)
+  /api/categorias:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Categoria'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Listar categorias
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Categoria
+        in: body
+        name: categoria
+        required: true
+        schema:
+          $ref: '#/definitions/models.Categoria'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Categoria'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Crear categoria
+  /api/categorias/{id}:
+    delete:
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Eliminar categoria
+    get:
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Categoria'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Obtener categoria por id
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Categoria
+        in: body
+        name: categoria
+        required: true
+        schema:
+          $ref: '#/definitions/models.Categoria'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Categoria'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Actualizar categoria
+  /api/logs:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              additionalProperties: true
+              type: object
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Listar logs de transacciones
+  /api/resumen:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Obtener resumen financiero (vista resumen_financiero)
+  /api/transacciones:
+    get:
+      parameters:
+      - description: Número máximo de movimientos a devolver
+        in: query
+        name: limit
+        type: integer
+      - description: Fecha inicio (RFC3339 o YYYY-MM-DD)
+        in: query
+        name: from
+        type: string
+      - description: Fecha fin (RFC3339 o YYYY-MM-DD)
+        in: query
+        name: to
+        type: string
+      - description: 'Tipo de movimiento: INGRESO|EGRESO'
+        in: query
+        name: tipo
+        type: string
+      - description: Buscar por descripcion (texto parcial)
+        in: query
+        name: descripcion
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/models.Transaccion'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Listar transacciones
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Transaccion
+        in: body
+        name: transaccion
+        required: true
+        schema:
+          $ref: '#/definitions/models.TransaccionCreateInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.Transaccion'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Crear transaccion
+  /api/transacciones/{id}:
+    delete:
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: No Content
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Eliminar transaccion
+    get:
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Transaccion'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Obtener transaccion por id
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Campos a actualizar (parcial)
+        in: body
+        name: transaccion
+        schema:
+          $ref: '#/definitions/models.TransaccionUpdateInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.Transaccion'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Actualizar transaccion parcialmente
+swagger: "2.0"

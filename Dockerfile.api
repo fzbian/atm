@@ -1,0 +1,14 @@
+# Dockerfile para la API Go
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux go build -o atm main.go
+
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /app/atm .
+COPY example.env .env
+EXPOSE 7771
+CMD ["./atm"]
+

@@ -1,0 +1,26 @@
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /api/categorias           --> atm/controllers.GetCategorias (3 handlers)
+[GIN-debug] POST   /api/categorias           --> atm/controllers.CreateCategoria (3 handlers)
+[GIN-debug] GET    /api/categorias/:id       --> atm/controllers.GetCategoria (3 handlers)
+[GIN-debug] PUT    /api/categorias/:id       --> atm/controllers.UpdateCategoria (3 handlers)
+[GIN-debug] DELETE /api/categorias/:id       --> atm/controllers.DeleteCategoria (3 handlers)
+[GIN-debug] GET    /api/transacciones        --> atm/controllers.GetTransacciones (3 handlers)
+[GIN-debug] POST   /api/transacciones        --> atm/controllers.CreateTransaccion (3 handlers)
+[GIN-debug] GET    /api/transacciones/:id    --> atm/controllers.GetTransaccion (3 handlers)
+[GIN-debug] PUT    /api/transacciones/:id    --> atm/controllers.UpdateTransaccion (3 handlers)
+[GIN-debug] DELETE /api/transacciones/:id    --> atm/controllers.DeleteTransaccion (3 handlers)
+[GIN-debug] GET    /api/caja                 --> atm/controllers.GetCaja (3 handlers)
+[GIN-debug] GET    /api/logs                 --> atm/controllers.GetTransaccionesLog (3 handlers)
+[GIN-debug] GET    /api/resumen              --> atm/controllers.GetResumenFinanciero (3 handlers)
+[GIN-debug] GET    /swagger/*any             --> github.com/swaggo/gin-swagger.CustomWrapHandler.func1 (3 handlers)
+[GIN-debug] GET    /                         --> main.main.func1 (3 handlers)
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.
+[GIN-debug] Environment variable PORT is undefined. Using port :8080 by default
+[GIN-debug] Listening and serving HTTP on :8080
+signal: killed

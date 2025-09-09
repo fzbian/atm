@@ -1,0 +1,79 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
+	"atm/controllers"
+	"atm/database"
+	"atm/docs"
+)
+
+// @title ATM API
+// @version 1.0
+// @description API para gestionar categorias, transacciones, caja y logs. Documentación generada con swaggo.
+// @contact.name Soporte
+// @contact.email soporte@example.com
+// @host localhost:8080
+// @BasePath /
+func main() {
+	// Inicializar conexión a la base de datos
+	db, err := database.Connect()
+	if err != nil {
+		log.Fatalf("failed to connect database: %v", err)
+	}
+	// asignar DB a controladores
+	controllers.SetDB(db)
+
+	// documentación (swag) - valores por defecto, sobreescribibles por swag init
+	docs.SwaggerInfo.Title = "ATM API"
+	docs.SwaggerInfo.Description = "API para gestionar el sistema ATM"
+	docs.SwaggerInfo.Version = "1.0"
+	docs.SwaggerInfo.Host = "localhost:8080"
+	docs.SwaggerInfo.BasePath = "/"
+
+	r := gin.Default()
+
+	// Habilitar CORS
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization", "apikey"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+	}))
+
+	// Rutas de la API
+	api := r.Group("/api")
+	{
+		controllers.RegisterCategoriaRoutes(api)
+		controllers.RegisterTransaccionRoutes(api)
+		controllers.RegisterCajaRoutes(api)
+		controllers.RegisterLogsRoutes(api)
+		controllers.RegisterResumenRoutes(api)
+	}
+
+	// Swagger UI en /swagger/index.html
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	// endpoint health
+	r.GET("/", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	// Leer puerto de variable de entorno
+	port := os.Getenv("API_PORT")
+	if port == "" {
+		port = "7771"
+	}
+
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("failed to run server: %v", err)
+	}
+}
