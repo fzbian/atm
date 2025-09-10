@@ -274,6 +274,23 @@ func CreateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Obtener tipo de la categoria
+	var categoria models.Categoria
+	if err := DB.First(&categoria, input.CategoriaID).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "categoria no encontrada"})
+		return
+	}
+	if categoria.Tipo == "EGRESO" {
+		var caja models.Caja
+		if err := DB.First(&caja, 1).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo obtener saldo de caja"})
+			return
+		}
+		if caja.Saldo < input.Monto {
+			c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en caja para realizar el egreso", "saldo_actual": caja.Saldo, "monto_solicitado": input.Monto})
+			return
+		}
+	}
 	transaccion := models.Transaccion{
 		CategoriaID: input.CategoriaID,
 		Monto:       input.Monto,
@@ -284,9 +301,6 @@ func CreateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Obtener datos de la categoria
-	var categoria models.Categoria
-	DB.First(&categoria, transaccion.CategoriaID)
 	emoji := tipoEmoji(categoria.Tipo)
 	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto))
 	notify.SendText(msg)
@@ -455,12 +469,16 @@ func DeleteTransaccion(c *gin.Context) {
 
 // -------------------- CAJA --------------------
 // GetCaja godoc
-// @Summary Obtener saldo en caja (desde Odoo)
+// @Summary Obtener saldo en caja
+// @Description Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve el saldo combinado con Odoo.
 // @Produce json
+// @Param solo_caja query bool false "Solo saldo de caja local (sin Odoo)"
 // @Success 200 {object} models.CajaOdoo
+// @Success 200 {object} models.Caja
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/caja [get]
 func GetCaja(c *gin.Context) {
+	soloCaja := c.Query("solo_caja")
 	var cajaLocal models.Caja
 	if err := DB.First(&cajaLocal, 1).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -468,6 +486,14 @@ func GetCaja(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error obteniendo caja local", "detalle": err.Error()})
+		return
+	}
+	if soloCaja == "true" || soloCaja == "1" {
+		c.JSON(http.StatusOK, gin.H{
+			"id":                   cajaLocal.ID,
+			"saldo_caja":           cajaLocal.Saldo,
+			"ultima_actualizacion": cajaLocal.UltimaActualizacion,
+		})
 		return
 	}
 	client, err := odoo.NewFromEnv()

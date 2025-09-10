@@ -1,41 +1,16 @@
 version: '3.8'
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: atm-mysql
-    restart: always
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: atm
-      MYSQL_USER: atmuser
-      MYSQL_PASSWORD: atmpassword
-    ports:
-      - "3306:3306"
-    volumes:
-      - ./atm.sql:/docker-entrypoint-initdb.d/atm.sql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   api:
     build:
       context: .
-      dockerfile: Dockerfile.api
+      dockerfile: Dockerfile
     container_name: atm-api
     restart: always
     env_file:
       - example.env
     ports:
       - "7771:7771"
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
-      DB_HOST: mysql
-      DB_PORT: 3306
-      DB_USER: atmuser
-      DB_PASSWORD: atmpassword
-      DB_NAME: atm
-
+      API_PORT: 7771
+# La base de datos debe estar accesible desde el URI en el .env
+# No se despliega MySQL aquí, solo la API

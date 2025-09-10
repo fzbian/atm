@@ -20,15 +20,24 @@ const docTemplate = `{
     "paths": {
         "/api/caja": {
             "get": {
+                "description": "Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve el saldo combinado con Odoo.",
                 "produces": [
                     "application/json"
                 ],
-                "summary": "Obtener saldo en caja (desde Odoo)",
+                "summary": "Obtener saldo en caja",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Solo saldo de caja local (sin Odoo)",
+                        "name": "solo_caja",
+                        "in": "query"
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.CajaOdoo"
+                            "$ref": "#/definitions/models.Caja"
                         }
                     },
                     "500": {
@@ -564,6 +573,20 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "models.Caja": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "saldo": {
+                    "type": "number"
+                },
+                "ultima_actualizacion": {
+                    "type": "string"
+                }
+            }
+        },
         "models.CajaOdoo": {
             "type": "object",
             "properties": {

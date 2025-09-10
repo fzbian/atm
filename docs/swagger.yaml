@@ -1,5 +1,14 @@
 basePath: /
 definitions:
+  models.Caja:
+    properties:
+      id:
+        type: integer
+      saldo:
+        type: number
+      ultima_actualizacion:
+        type: string
+    type: object
   models.CajaOdoo:
     properties:
       id:
@@ -98,19 +107,26 @@ info:
 paths:
   /api/caja:
     get:
+      description: Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve
+        el saldo combinado con Odoo.
+      parameters:
+      - description: Solo saldo de caja local (sin Odoo)
+        in: query
+        name: solo_caja
+        type: boolean
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/models.CajaOdoo'
+            $ref: '#/definitions/models.Caja'
         "500":
           description: Internal Server Error
           schema:
             additionalProperties: true
             type: object
-      summary: Obtener saldo en caja (desde Odoo)
+      summary: Obtener saldo en caja
   /api/categorias:
     get:
       produces:
