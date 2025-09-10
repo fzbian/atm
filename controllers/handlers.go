@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,23 +36,32 @@ func GetCategorias(c *gin.Context) {
 // @Summary Crear categoria
 // @Accept json
 // @Produce json
-// @Param categoria body models.Categoria true "Categoria"
+// @Param categoria body models.CategoriaCreateInput true "Categoria"
 // @Success 201 {object} models.Categoria
 // @Failure 400 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/categorias [post]
 func CreateCategoria(c *gin.Context) {
-	var input models.Categoria
+	var input models.CategoriaCreateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := DB.Create(&input).Error; err != nil {
+	// validar tipo
+	tipo := strings.ToUpper(strings.TrimSpace(input.Tipo))
+	if tipo != "INGRESO" && tipo != "EGRESO" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "tipo inválido: debe ser 'INGRESO' o 'EGRESO'"})
+		return
+	}
+	categoria := models.Categoria{
+		Nombre: input.Nombre,
+		Tipo:   tipo,
+	}
+	if err := DB.Create(&categoria).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Notificación removida para categorías
-	c.JSON(http.StatusCreated, input)
+	c.JSON(http.StatusCreated, categoria)
 }
 
 // GetCategoria godoc
@@ -77,11 +87,11 @@ func GetCategoria(c *gin.Context) {
 }
 
 // UpdateCategoria godoc
-// @Summary Actualizar categoria
+// @Summary Actualizar categoria (parcial)
 // @Accept json
 // @Produce json
 // @Param id path int true "ID"
-// @Param categoria body models.Categoria true "Categoria"
+// @Param categoria body models.CategoriaUpdateInput false "Campos a actualizar (parcial)"
 // @Success 200 {object} models.Categoria
 // @Failure 400 {object} map[string]interface{}
 // @Failure 404 {object} map[string]interface{}
@@ -98,18 +108,30 @@ func UpdateCategoria(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	var input models.Categoria
+	var input models.CategoriaUpdateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	categoria.Nombre = input.Nombre
-	categoria.Tipo = input.Tipo
+	if input.Nombre == nil && input.Tipo == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
+		return
+	}
+	if input.Nombre != nil {
+		categoria.Nombre = *input.Nombre
+	}
+	if input.Tipo != nil {
+		tipo := strings.ToUpper(strings.TrimSpace(*input.Tipo))
+		if tipo != "INGRESO" && tipo != "EGRESO" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "tipo inválido: debe ser 'INGRESO' o 'EGRESO'"})
+			return
+		}
+		categoria.Tipo = tipo
+	}
 	if err := DB.Save(&categoria).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Notificación removida para categorías
 	c.JSON(http.StatusOK, categoria)
 }
 
@@ -156,10 +178,11 @@ func DeleteCategoria(c *gin.Context) {
 func GetTransacciones(c *gin.Context) {
 	// Parámetros opcionales
 	limitStr := c.Query("limit")
-	fromStr := c.Query("from") // fecha inicio (inclusive) RFC3339 o YYYY-MM-DD
-	toStr := c.Query("to")     // fecha fin (inclusive) RFC3339 o YYYY-MM-DD
-	tipo := c.Query("tipo")    // INGRESO o EGRESO (filtrado por categoria)
-	descripcion := c.Query("descripcion")
+	fromStr := c.Query("from")            // fecha inicio (inclusive) RFC3339 o YYYY-MM-DD
+	toStr := c.Query("to")                // fecha fin (inclusive) RFC3339 o YYYY-MM-DD
+	tipo := c.Query("tipo")               // INGRESO o EGRESO (filtrado por categoria)
+	descripcion := c.Query("descripcion") // Filtro por descripción
+	usuario := c.Query("usuario")         // Nuevo filtro por usuario
 
 	var transacciones []models.Transaccion
 	query := DB.Model(&models.Transaccion{})
@@ -172,6 +195,11 @@ func GetTransacciones(c *gin.Context) {
 	// Filtros de descripcion
 	if descripcion != "" {
 		query = query.Where("transacciones.descripcion LIKE ?", "%"+descripcion+"%")
+	}
+
+	// Filtro por usuario
+	if usuario != "" {
+		query = query.Where("transacciones.usuario = ?", usuario)
 	}
 
 	// Parsear y aplicar from/to
@@ -246,7 +274,12 @@ func CreateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	transaccion := models.Transaccion{CategoriaID: input.CategoriaID, Monto: input.Monto, Descripcion: input.Descripcion}
+	transaccion := models.Transaccion{
+		CategoriaID: input.CategoriaID,
+		Monto:       input.Monto,
+		Descripcion: input.Descripcion,
+		Usuario:     input.Usuario,
+	}
 	if err := DB.Create(&transaccion).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -288,6 +321,7 @@ func GetTransaccion(c *gin.Context) {
 // @Produce json
 // @Param id path int true "ID"
 // @Param transaccion body models.TransaccionUpdateInput false "Campos a actualizar (parcial)"
+// @Param usuario query string true "Usuario que actualiza la transacción"
 // @Success 200 {object} models.Transaccion
 // @Failure 400 {object} map[string]interface{}
 // @Failure 404 {object} map[string]interface{}
@@ -295,6 +329,11 @@ func GetTransaccion(c *gin.Context) {
 // @Router /api/transacciones/{id} [put]
 func UpdateTransaccion(c *gin.Context) {
 	id := c.Param("id")
+	usuario := c.Query("usuario")
+	if usuario == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parametro 'usuario' es requerido"})
+		return
+	}
 	var t models.Transaccion
 	if err := DB.First(&t, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -316,18 +355,36 @@ func UpdateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
 		return
 	}
+	updates := map[string]interface{}{}
 	if input.CategoriaID != nil {
-		t.CategoriaID = *input.CategoriaID
+		updates["categoria_id"] = *input.CategoriaID
 	}
 	if input.Monto != nil {
-		t.Monto = *input.Monto
+		updates["monto"] = *input.Monto
 	}
 	if input.Descripcion != nil {
-		t.Descripcion = *input.Descripcion
+		updates["descripcion"] = *input.Descripcion
 	}
-	if err := DB.Save(&t).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	log.Printf("[DEBUG] UpdateTransaccion updates map: %v", updates)
+	res := DB.Debug().Model(&t).Updates(updates)
+	if res.Error != nil {
+		log.Printf("[DEBUG] UpdateTransaccion error: %v", res.Error)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
 		return
+	}
+	log.Printf("[DEBUG] UpdateTransaccion RowsAffected=%d", res.RowsAffected)
+	// recargar la transacción actualizada
+	if err := DB.First(&t, t.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo recargar transaccion", "detalle": err.Error()})
+		return
+	}
+	// Actualizar el usuario en el último log de UPDATE generado por el trigger
+	var lastLogID int64
+	err := DB.Raw("SELECT id FROM transacciones_log WHERE transaccion_id = ? AND accion = 'UPDATE' ORDER BY id DESC LIMIT 1", t.ID).Scan(&lastLogID).Error
+	if err == nil && lastLogID > 0 {
+		if execRes := DB.Exec("UPDATE transacciones_log SET usuario = ? WHERE id = ?", usuario, lastLogID); execRes.Error != nil {
+			log.Printf("[DEBUG] UpdateTransaccion update log error: %v", execRes.Error)
+		}
 	}
 	var lines []string
 	if t.CategoriaID != oldCat {
@@ -344,7 +401,7 @@ func UpdateTransaccion(c *gin.Context) {
 		lines = append(lines, fmt.Sprintf("📄 *Descripcion:* %s", t.Descripcion))
 	}
 	if len(lines) > 0 {
-		msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n%s", t.ID, strings.Join(lines, "\n"))
+		msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n%s\n👤 *Usuario:* %s", t.ID, strings.Join(lines, "\n"), usuario)
 		notify.SendText(msg)
 	}
 	c.JSON(http.StatusOK, t)
@@ -354,12 +411,18 @@ func UpdateTransaccion(c *gin.Context) {
 // @Summary Eliminar transaccion
 // @Produce json
 // @Param id path int true "ID"
+// @Param usuario query string true "Usuario que elimina la transacción"
 // @Success 204
 // @Failure 404 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/transacciones/{id} [delete]
 func DeleteTransaccion(c *gin.Context) {
 	id := c.Param("id")
+	usuario := c.Query("usuario")
+	if usuario == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "parametro 'usuario' es requerido"})
+		return
+	}
 	var t models.Transaccion
 	if err := DB.First(&t, id).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -372,11 +435,20 @@ func DeleteTransaccion(c *gin.Context) {
 	// Datos antes de borrar
 	desc := t.Descripcion
 	monto := t.Monto
-	if err := DB.Delete(&t).Error; err != nil {
+	// borrar
+	if err := DB.Delete(&models.Transaccion{}, t.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	msg := fmt.Sprintf("*TRANSACCION ELIMINADA*\n📪 *ID:* %s\n📄 *Descripcion:* %s\n💲*Monto:* %s", id, desc, formatMonto(monto))
+	// Actualizar el usuario en el último log de DELETE generado por el trigger
+	var lastLogID int64
+	err2 := DB.Raw("SELECT id FROM transacciones_log WHERE transaccion_id = ? AND accion = 'DELETE' ORDER BY id DESC LIMIT 1", t.ID).Scan(&lastLogID).Error
+	if err2 == nil && lastLogID > 0 {
+		if execRes := DB.Exec("UPDATE transacciones_log SET usuario = ? WHERE id = ?", usuario, lastLogID); execRes.Error != nil {
+			log.Printf("[DEBUG] DeleteTransaccion update log error: %v", execRes.Error)
+		}
+	}
+	msg := fmt.Sprintf("*TRANSACCION ELIMINADA*\n📪 *ID:* %s\n📄 *Descripcion:* %s\n💲*Monto:* %s\n👤 *Usuario:* %s", id, desc, formatMonto(monto), usuario)
 	notify.SendText(msg)
 	c.Status(http.StatusNoContent)
 }
@@ -453,6 +525,32 @@ func GetResumenFinanciero(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resumen)
+}
+
+// DeleteAllData godoc
+// @Summary Eliminar todos los datos de la base de datos
+// @Description Elimina todas las transacciones, logs, caja, y categorías (deja la estructura vacía)
+// @Produce json
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/limpiar [post]
+func DeleteAllData(c *gin.Context) {
+	errTx := DB.Exec("DELETE FROM transacciones").Error
+	errLog := DB.Exec("DELETE FROM transacciones_log").Error
+	errCaja := DB.Exec("UPDATE caja SET saldo = 0").Error
+	errCat := DB.Exec("DELETE FROM categorias").Error
+
+	if errTx != nil || errLog != nil || errCaja != nil || errCat != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":         "Error al limpiar la base de datos",
+			"transacciones": errTx,
+			"logs":          errLog,
+			"caja":          errCaja,
+			"categorias":    errCat,
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "Base de datos limpiada correctamente"})
 }
 
 // Helpers de formato

@@ -59,3 +59,11 @@ func RegisterResumenRoutes(rg *gin.RouterGroup) {
 		r.GET("", GetResumenFinanciero)
 	}
 }
+
+// RegisterLimpiarRoutes registra la ruta para limpiar la base de datos
+func RegisterLimpiarRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/limpiar")
+	{
+		r.POST("", DeleteAllData)
+	}
+}

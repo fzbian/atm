@@ -23,6 +23,12 @@ import (
 // @host localhost:8080
 // @BasePath /
 func main() {
+	// Leer puerto de variable de entorno y asignar valor por defecto
+	port := os.Getenv("API_PORT")
+	if port == "" {
+		port = "8080"
+	}
+
 	// Inicializar conexión a la base de datos
 	db, err := database.Connect()
 	if err != nil {
@@ -35,7 +41,8 @@ func main() {
 	docs.SwaggerInfo.Title = "ATM API"
 	docs.SwaggerInfo.Description = "API para gestionar el sistema ATM"
 	docs.SwaggerInfo.Version = "1.0"
-	docs.SwaggerInfo.Host = "localhost:8080"
+	// usar puerto efectivo
+	docs.SwaggerInfo.Host = "localhost:" + port
 	docs.SwaggerInfo.BasePath = "/"
 
 	r := gin.Default()
@@ -57,6 +64,7 @@ func main() {
 		controllers.RegisterCajaRoutes(api)
 		controllers.RegisterLogsRoutes(api)
 		controllers.RegisterResumenRoutes(api)
+		controllers.RegisterLimpiarRoutes(api)
 	}
 
 	// Swagger UI en /swagger/index.html
@@ -66,12 +74,6 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-
-	// Leer puerto de variable de entorno
-	port := os.Getenv("API_PORT")
-	if port == "" {
-		port = "7771"
-	}
 
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("failed to run server: %v", err)

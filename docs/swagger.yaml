@@ -29,6 +29,23 @@ definitions:
       tipo:
         type: string
     type: object
+  models.CategoriaCreateInput:
+    properties:
+      nombre:
+        type: string
+      tipo:
+        type: string
+    required:
+    - nombre
+    - tipo
+    type: object
+  models.CategoriaUpdateInput:
+    properties:
+      nombre:
+        type: string
+      tipo:
+        type: string
+    type: object
   models.Transaccion:
     properties:
       categoria_id:
@@ -41,6 +58,8 @@ definitions:
         type: integer
       monto:
         type: number
+      usuario:
+        type: string
     type: object
   models.TransaccionCreateInput:
     properties:
@@ -50,10 +69,13 @@ definitions:
         type: string
       monto:
         type: number
+      usuario:
+        type: string
     required:
     - categoria_id
     - descripcion
     - monto
+    - usuario
     type: object
   models.TransaccionUpdateInput:
     properties:
@@ -115,7 +137,7 @@ paths:
         name: categoria
         required: true
         schema:
-          $ref: '#/definitions/models.Categoria'
+          $ref: '#/definitions/models.CategoriaCreateInput'
       produces:
       - application/json
       responses:
@@ -192,12 +214,11 @@ paths:
         name: id
         required: true
         type: integer
-      - description: Categoria
+      - description: Campos a actualizar (parcial)
         in: body
         name: categoria
-        required: true
         schema:
-          $ref: '#/definitions/models.Categoria'
+          $ref: '#/definitions/models.CategoriaUpdateInput'
       produces:
       - application/json
       responses:
@@ -220,7 +241,25 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: Actualizar categoria
+      summary: Actualizar categoria (parcial)
+  /api/limpiar:
+    post:
+      description: Elimina todas las transacciones, logs, caja, y categorías (deja
+        la estructura vacía)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Eliminar todos los datos de la base de datos
   /api/logs:
     get:
       produces:
@@ -334,6 +373,11 @@ paths:
         name: id
         required: true
         type: integer
+      - description: Usuario que elimina la transacción
+        in: query
+        name: usuario
+        required: true
+        type: string
       produces:
       - application/json
       responses:
@@ -389,6 +433,11 @@ paths:
         name: transaccion
         schema:
           $ref: '#/definitions/models.TransaccionUpdateInput'
+      - description: Usuario que actualiza la transacción
+        in: query
+        name: usuario
+        required: true
+        type: string
       produces:
       - application/json
       responses:

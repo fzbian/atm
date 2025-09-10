@@ -3,19 +3,23 @@ package models
 import "time"
 
 // Transaccion representa la tabla transacciones
+// Ahora incluye el campo usuario
 type Transaccion struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	CategoriaID uint      `gorm:"column:categoria_id;not null" json:"categoria_id"`
 	Monto       float64   `gorm:"type:decimal(15,2);not null" json:"monto"`
 	Fecha       time.Time `gorm:"column:fecha;autoCreateTime" json:"fecha"`
 	Descripcion string    `gorm:"type:text;not null" json:"descripcion"`
+	Usuario     string    `gorm:"type:varchar(100);" json:"usuario"`
 }
 
 // TransaccionCreateInput limita los campos permitidos al crear una transacción (id y fecha se generan automáticamente)
+// Ahora usuario es obligatorio
 type TransaccionCreateInput struct {
 	CategoriaID uint    `json:"categoria_id" binding:"required"`
 	Monto       float64 `json:"monto" binding:"required"`
 	Descripcion string  `json:"descripcion" binding:"required"`
+	Usuario     string  `json:"usuario" binding:"required"`
 }
 
 // TransaccionUpdateInput ahora usa punteros para distinguir campos omitidos

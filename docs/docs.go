@@ -81,7 +81,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Categoria"
+                            "$ref": "#/definitions/models.CategoriaCreateInput"
                         }
                     }
                 ],
@@ -154,7 +154,7 @@ const docTemplate = `{
                 "produces": [
                     "application/json"
                 ],
-                "summary": "Actualizar categoria",
+                "summary": "Actualizar categoria (parcial)",
                 "parameters": [
                     {
                         "type": "integer",
@@ -164,12 +164,11 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Categoria",
+                        "description": "Campos a actualizar (parcial)",
                         "name": "categoria",
                         "in": "body",
-                        "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Categoria"
+                            "$ref": "#/definitions/models.CategoriaUpdateInput"
                         }
                     }
                 ],
@@ -223,6 +222,31 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/limpiar": {
+            "post": {
+                "description": "Elimina todas las transacciones, logs, caja, y categorías (deja la estructura vacía)",
+                "produces": [
+                    "application/json"
+                ],
+                "summary": "Eliminar todos los datos de la base de datos",
+                "responses": {
+                    "200": {
+                        "description": "OK",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -457,6 +481,13 @@ const docTemplate = `{
                         "schema": {
                             "$ref": "#/definitions/models.TransaccionUpdateInput"
                         }
+                    },
+                    {
+                        "type": "string",
+                        "description": "Usuario que actualiza la transacción",
+                        "name": "usuario",
+                        "in": "query",
+                        "required": true
                     }
                 ],
                 "responses": {
@@ -500,6 +531,13 @@ const docTemplate = `{
                         "description": "ID",
                         "name": "id",
                         "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Usuario que elimina la transacción",
+                        "name": "usuario",
+                        "in": "query",
                         "required": true
                     }
                 ],
@@ -570,6 +608,32 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CategoriaCreateInput": {
+            "type": "object",
+            "required": [
+                "nombre",
+                "tipo"
+            ],
+            "properties": {
+                "nombre": {
+                    "type": "string"
+                },
+                "tipo": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.CategoriaUpdateInput": {
+            "type": "object",
+            "properties": {
+                "nombre": {
+                    "type": "string"
+                },
+                "tipo": {
+                    "type": "string"
+                }
+            }
+        },
         "models.Transaccion": {
             "type": "object",
             "properties": {
@@ -587,6 +651,9 @@ const docTemplate = `{
                 },
                 "monto": {
                     "type": "number"
+                },
+                "usuario": {
+                    "type": "string"
                 }
             }
         },
@@ -595,7 +662,8 @@ const docTemplate = `{
             "required": [
                 "categoria_id",
                 "descripcion",
-                "monto"
+                "monto",
+                "usuario"
             ],
             "properties": {
                 "categoria_id": {
@@ -606,6 +674,9 @@ const docTemplate = `{
                 },
                 "monto": {
                     "type": "number"
+                },
+                "usuario": {
+                    "type": "string"
                 }
             }
         },
