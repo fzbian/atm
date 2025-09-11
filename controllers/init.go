@@ -60,6 +60,14 @@ func RegisterResumenRoutes(rg *gin.RouterGroup) {
 	}
 }
 
+// RegisterNotifyRoutes registra rutas de notificaciones
+func RegisterNotifyRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/notify")
+	{
+		r.GET("/test", NotifyTest)
+	}
+}
+
 // RegisterLimpiarRoutes registra la ruta para limpiar la base de datos
 func RegisterLimpiarRoutes(rg *gin.RouterGroup) {
 	r := rg.Group("/limpiar")

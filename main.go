@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/swaggo/files"
+	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"atm/controllers"
@@ -64,6 +64,7 @@ func main() {
 		controllers.RegisterCajaRoutes(api)
 		controllers.RegisterLogsRoutes(api)
 		controllers.RegisterResumenRoutes(api)
+		controllers.RegisterNotifyRoutes(api)
 		controllers.RegisterLimpiarRoutes(api)
 	}
 

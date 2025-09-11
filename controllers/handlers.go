@@ -302,7 +302,7 @@ func CreateTransaccion(c *gin.Context) {
 		return
 	}
 	emoji := tipoEmoji(categoria.Tipo)
-	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto))
+	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n👤 *Usuario:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto), transaccion.Usuario)
 	notify.SendText(msg)
 	c.JSON(http.StatusCreated, transaccion)
 }
@@ -609,4 +609,23 @@ func tipoEmoji(tipo string) string {
 	default:
 		return "🏷️"
 	}
+}
+
+// -------------------- NOTIFY --------------------
+// NotifyTest godoc
+// @Summary Enviar mensaje de prueba de notificación
+// @Description Envía un mensaje de prueba usando las variables de entorno NOTIFY_*. Por defecto envía "ping".
+// @Produce json
+// @Param text query string false "Texto a enviar"
+// @Success 200 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/notify/test [get]
+func NotifyTest(c *gin.Context) {
+	text := c.Query("text")
+	if strings.TrimSpace(text) == "" {
+		text = "ping"
+	}
+	// Enviar y confirmar con 200 (la función interna ya hace logging de errores)
+	notify.SendText(text)
+	c.JSON(http.StatusOK, gin.H{"status": "sent", "text": text})
 }

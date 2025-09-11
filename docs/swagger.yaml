@@ -294,6 +294,29 @@ paths:
             additionalProperties: true
             type: object
       summary: Listar logs de transacciones
+  /api/notify/test:
+    get:
+      description: Envía un mensaje de prueba usando las variables de entorno NOTIFY_*.
+        Por defecto envía "ping".
+      parameters:
+      - description: Texto a enviar
+        in: query
+        name: text
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Enviar mensaje de prueba de notificación
   /api/resumen:
     get:
       produces:

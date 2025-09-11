@@ -292,6 +292,39 @@
                 }
             }
         },
+        "/api/notify/test": {
+            "get": {
+                "description": "Envía un mensaje de prueba usando las variables de entorno NOTIFY_*. Por defecto envía \"ping\".",
+                "produces": [
+                    "application/json"
+                ],
+                "summary": "Enviar mensaje de prueba de notificación",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Texto a enviar",
+                        "name": "text",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/resumen": {
             "get": {
                 "produces": [
