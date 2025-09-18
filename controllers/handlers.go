@@ -614,7 +614,7 @@ func tipoEmoji(tipo string) string {
 // -------------------- NOTIFY --------------------
 // NotifyTest godoc
 // @Summary Enviar mensaje de prueba de notificación
-// @Description Envía un mensaje de prueba usando las variables de entorno NOTIFY_*. Por defecto envía "ping".
+// @Description Envía un mensaje de prueba al chat fijo 'atm' usando NOTIFY_URL (nuevo formato /whatsapp/send-text). Por defecto envía "ping".
 // @Produce json
 // @Param text query string false "Texto a enviar"
 // @Success 200 {object} map[string]interface{}
