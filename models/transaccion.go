@@ -7,6 +7,7 @@ import "time"
 type Transaccion struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	CategoriaID uint      `gorm:"column:categoria_id;not null" json:"categoria_id"`
+	CajaID      uint      `gorm:"column:caja_id;not null" json:"caja_id"`
 	Monto       float64   `gorm:"type:decimal(15,2);not null" json:"monto"`
 	Fecha       time.Time `gorm:"column:fecha;autoCreateTime" json:"fecha"`
 	Descripcion string    `gorm:"type:text;not null" json:"descripcion"`
@@ -17,6 +18,7 @@ type Transaccion struct {
 // Ahora usuario es obligatorio
 type TransaccionCreateInput struct {
 	CategoriaID uint    `json:"categoria_id" binding:"required"`
+	CajaID      uint    `json:"caja_id" binding:"required"`
 	Monto       float64 `json:"monto" binding:"required"`
 	Descripcion string  `json:"descripcion" binding:"required"`
 	Usuario     string  `json:"usuario" binding:"required"`
@@ -26,6 +28,7 @@ type TransaccionCreateInput struct {
 // (solo se actualizan los que lleguen no nulos)
 type TransaccionUpdateInput struct {
 	CategoriaID *uint    `json:"categoria_id,omitempty"`
+	CajaID      *uint    `json:"caja_id,omitempty"`
 	Monto       *float64 `json:"monto,omitempty"`
 	Descripcion *string  `json:"descripcion,omitempty"`
 }

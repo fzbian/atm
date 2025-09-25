@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/caja": {
             "get": {
-                "description": "Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve el saldo combinado con Odoo.",
+                "description": "Si solo_caja=true, devuelve solo los saldos locales (caja 1 y caja 2). Si no, devuelve saldos locales y saldos de Odoo (POS) combinados.",
                 "produces": [
                     "application/json"
                 ],
@@ -300,7 +300,7 @@ const docTemplate = `{
         },
         "/api/notify/test": {
             "get": {
-                "description": "Envía un mensaje de prueba usando las variables de entorno NOTIFY_*. Por defecto envía \"ping\".",
+                "description": "Envía un mensaje de prueba al chat fijo 'atm' usando NOTIFY_URL (nuevo formato /whatsapp/send-text). Por defecto envía \"ping\".",
                 "produces": [
                     "application/json"
                 ],
@@ -319,6 +319,84 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/odoo/cashout": {
+            "post": {
+                "description": "Realiza una retirada de caja (cash out) en una sesión de POS abierta en Odoo. Usa credenciales de entorno ODOO_*.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "summary": "Cash out en Odoo POS",
+                "parameters": [
+                    {
+                        "description": "Cash out request (usuario puede ir en body o como query param)",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.cashOutRequest"
+                        }
+                    },
+                    {
+                        "type": "string",
+                        "description": "Usuario que realiza el cashout (alternativo a body.usuario)",
+                        "name": "usuario",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/odoo.CashOutResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/odoo/pos": {
+            "get": {
+                "description": "Devuelve los nombres de los puntos de venta disponibles en Odoo usando las credenciales ODOO_* del entorno.",
+                "produces": [
+                    "application/json"
+                ],
+                "summary": "Listar nombres de POS en Odoo",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
@@ -387,6 +465,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "integer",
+                        "description": "Filtrar por ID de caja",
+                        "name": "caja_id",
+                        "in": "query"
+                    },
+                    {
                         "type": "string",
                         "description": "Buscar por descripcion (texto parcial)",
                         "name": "descripcion",
@@ -429,7 +513,7 @@ const docTemplate = `{
                 "summary": "Crear transaccion",
                 "parameters": [
                     {
-                        "description": "Transaccion",
+                        "description": "Transaccion (requiere caja_id)",
                         "name": "transaccion",
                         "in": "body",
                         "required": true,
@@ -517,7 +601,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Campos a actualizar (parcial)",
+                        "description": "Campos a actualizar (parcial). Debe incluir caja_id en body o query.",
                         "name": "transaccion",
                         "in": "body",
                         "schema": {
@@ -530,6 +614,12 @@ const docTemplate = `{
                         "name": "usuario",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "ID de caja (obligatorio si no se envía en el body)",
+                        "name": "caja_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -606,6 +696,32 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "controllers.cashOutRequest": {
+            "type": "object",
+            "required": [
+                "amount",
+                "category_name",
+                "pos_name",
+                "reason"
+            ],
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "category_name": {
+                    "type": "string"
+                },
+                "pos_name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "usuario": {
+                    "type": "string"
+                }
+            }
+        },
         "models.Caja": {
             "type": "object",
             "properties": {
@@ -634,6 +750,9 @@ const docTemplate = `{
                     }
                 },
                 "saldo_caja": {
+                    "type": "number"
+                },
+                "saldo_caja2": {
                     "type": "number"
                 },
                 "saldo_total": {
@@ -693,6 +812,9 @@ const docTemplate = `{
         "models.Transaccion": {
             "type": "object",
             "properties": {
+                "caja_id": {
+                    "type": "integer"
+                },
                 "categoria_id": {
                     "type": "integer"
                 },
@@ -716,12 +838,16 @@ const docTemplate = `{
         "models.TransaccionCreateInput": {
             "type": "object",
             "required": [
+                "caja_id",
                 "categoria_id",
                 "descripcion",
                 "monto",
                 "usuario"
             ],
             "properties": {
+                "caja_id": {
+                    "type": "integer"
+                },
                 "categoria_id": {
                     "type": "integer"
                 },
@@ -739,6 +865,9 @@ const docTemplate = `{
         "models.TransaccionUpdateInput": {
             "type": "object",
             "properties": {
+                "caja_id": {
+                    "type": "integer"
+                },
                 "categoria_id": {
                     "type": "integer"
                 },
@@ -747,6 +876,26 @@ const docTemplate = `{
                 },
                 "monto": {
                     "type": "number"
+                }
+            }
+        },
+        "odoo.CashOutResult": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                },
+                "mysql": {
+                    "type": "boolean"
+                },
+                "mysql_error": {
+                    "type": "string"
+                },
+                "ok": {
+                    "type": "boolean"
+                },
+                "session_id": {
+                    "type": "integer"
                 }
             }
         }

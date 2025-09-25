@@ -1,9 +1,11 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -170,6 +172,7 @@ func DeleteCategoria(c *gin.Context) {
 // @Param from query string false "Fecha inicio (RFC3339 o YYYY-MM-DD)"
 // @Param to query string false "Fecha fin (RFC3339 o YYYY-MM-DD)"
 // @Param tipo query string false "Tipo de movimiento: INGRESO|EGRESO"
+// @Param caja_id query int false "Filtrar por ID de caja"
 // @Param descripcion query string false "Buscar por descripcion (texto parcial)"
 // @Success 200 {array} models.Transaccion
 // @Failure 400 {object} map[string]interface{}
@@ -181,6 +184,7 @@ func GetTransacciones(c *gin.Context) {
 	fromStr := c.Query("from")            // fecha inicio (inclusive) RFC3339 o YYYY-MM-DD
 	toStr := c.Query("to")                // fecha fin (inclusive) RFC3339 o YYYY-MM-DD
 	tipo := c.Query("tipo")               // INGRESO o EGRESO (filtrado por categoria)
+	cajaIDStr := c.Query("caja_id")       // Filtro por caja
 	descripcion := c.Query("descripcion") // Filtro por descripción
 	usuario := c.Query("usuario")         // Nuevo filtro por usuario
 
@@ -200,6 +204,15 @@ func GetTransacciones(c *gin.Context) {
 	// Filtro por usuario
 	if usuario != "" {
 		query = query.Where("transacciones.usuario = ?", usuario)
+	}
+	// Filtro por caja
+	if cajaIDStr != "" {
+		if cajaID, err := strconv.Atoi(cajaIDStr); err == nil && cajaID > 0 {
+			query = query.Where("transacciones.caja_id = ?", cajaID)
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "parametro 'caja_id' inválido"})
+			return
+		}
 	}
 
 	// Parsear y aplicar from/to
@@ -263,7 +276,7 @@ func GetTransacciones(c *gin.Context) {
 // @Summary Crear transaccion
 // @Accept json
 // @Produce json
-// @Param transaccion body models.TransaccionCreateInput true "Transaccion"
+// @Param transaccion body models.TransaccionCreateInput true "Transaccion (requiere caja_id)"
 // @Success 201 {object} models.Transaccion
 // @Failure 400 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
@@ -280,19 +293,26 @@ func CreateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "categoria no encontrada"})
 		return
 	}
-	if categoria.Tipo == "EGRESO" {
-		var caja models.Caja
-		if err := DB.First(&caja, 1).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo obtener saldo de caja"})
+	// Validar caja existente
+	var caja models.Caja
+	if err := DB.First(&caja, input.CajaID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "caja no encontrada"})
 			return
 		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Si es EGRESO, validar saldo suficiente en esa caja
+	if categoria.Tipo == "EGRESO" {
 		if caja.Saldo < input.Monto {
-			c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en caja para realizar el egreso", "saldo_actual": caja.Saldo, "monto_solicitado": input.Monto})
+			c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja para realizar el egreso", "saldo_actual": caja.Saldo, "monto_solicitado": input.Monto, "caja_id": input.CajaID})
 			return
 		}
 	}
 	transaccion := models.Transaccion{
 		CategoriaID: input.CategoriaID,
+		CajaID:      input.CajaID,
 		Monto:       input.Monto,
 		Descripcion: input.Descripcion,
 		Usuario:     input.Usuario,
@@ -302,7 +322,7 @@ func CreateTransaccion(c *gin.Context) {
 		return
 	}
 	emoji := tipoEmoji(categoria.Tipo)
-	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n👤 *Usuario:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto), transaccion.Usuario)
+	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto), labelCaja(transaccion.CajaID), transaccion.Usuario)
 	notify.SendText(msg)
 	c.JSON(http.StatusCreated, transaccion)
 }
@@ -334,8 +354,9 @@ func GetTransaccion(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param id path int true "ID"
-// @Param transaccion body models.TransaccionUpdateInput false "Campos a actualizar (parcial)"
+// @Param transaccion body models.TransaccionUpdateInput false "Campos a actualizar (parcial). Debe incluir caja_id en body o query."
 // @Param usuario query string true "Usuario que actualiza la transacción"
+// @Param caja_id query int false "ID de caja (obligatorio si no se envía en el body)"
 // @Success 200 {object} models.Transaccion
 // @Failure 400 {object} map[string]interface{}
 // @Failure 404 {object} map[string]interface{}
@@ -365,13 +386,85 @@ func UpdateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if input.CategoriaID == nil && input.Monto == nil && input.Descripcion == nil {
+	// caja_id es obligatorio (ya sea en body o como query param)
+	var cajaID uint
+	if input.CajaID != nil {
+		cajaID = *input.CajaID
+	} else {
+		if s := strings.TrimSpace(c.Query("caja_id")); s != "" {
+			if v, err := strconv.Atoi(s); err == nil && v > 0 {
+				cajaID = uint(v)
+			}
+		}
+	}
+	if cajaID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "caja_id es requerido para actualizar"})
+		return
+	}
+	// Validar caja existente
+	{
+		var caja models.Caja
+		if err := DB.First(&caja, cajaID).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "caja no encontrada"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if input.CategoriaID == nil && input.Monto == nil && input.Descripcion == nil && input.CajaID == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
 		return
 	}
+	// Determinar nuevos valores propuestos
+	newCatID := oldCat
+	if input.CategoriaID != nil {
+		newCatID = *input.CategoriaID
+	}
+	newMonto := oldMonto
+	if input.Monto != nil {
+		newMonto = *input.Monto
+	}
+	// Si nuevo tipo es EGRESO, validar saldo suficiente
+	var newCat models.Categoria
+	if err := DB.First(&newCat, newCatID).Error; err == nil {
+		if strings.ToUpper(newCat.Tipo) == "EGRESO" {
+			// Si cambia de caja, necesitamos saldo >= nuevo monto en la nueva caja
+			if cajaID != t.CajaID {
+				var nuevaCaja models.Caja
+				if err := DB.First(&nuevaCaja, cajaID).Error; err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo validar saldo de caja", "detalle": err.Error()})
+					return
+				}
+				if nuevaCaja.Saldo < newMonto {
+					c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja destino para actualizar el egreso", "saldo_actual": nuevaCaja.Saldo, "monto_requerido": newMonto, "caja_id": cajaID})
+					return
+				}
+			} else {
+				// Misma caja: sólo validar delta positivo
+				if newMonto > oldMonto {
+					delta := newMonto - oldMonto
+					var caja models.Caja
+					if err := DB.First(&caja, cajaID).Error; err != nil {
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo validar saldo de caja", "detalle": err.Error()})
+						return
+					}
+					if caja.Saldo < delta {
+						c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja para aumentar el egreso", "saldo_actual": caja.Saldo, "incremento": delta, "caja_id": cajaID})
+						return
+					}
+				}
+			}
+		}
+	}
+	// Construir mapa de actualizaciones
 	updates := map[string]interface{}{}
 	if input.CategoriaID != nil {
 		updates["categoria_id"] = *input.CategoriaID
+	}
+	if cajaID != t.CajaID {
+		updates["caja_id"] = cajaID
 	}
 	if input.Monto != nil {
 		updates["monto"] = *input.Monto
@@ -415,7 +508,7 @@ func UpdateTransaccion(c *gin.Context) {
 		lines = append(lines, fmt.Sprintf("📄 *Descripcion:* %s", t.Descripcion))
 	}
 	if len(lines) > 0 {
-		msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n%s\n👤 *Usuario:* %s", t.ID, strings.Join(lines, "\n"), usuario)
+		msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n%s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", t.ID, strings.Join(lines, "\n"), labelCaja(cajaID), usuario)
 		notify.SendText(msg)
 	}
 	c.JSON(http.StatusOK, t)
@@ -449,6 +542,7 @@ func DeleteTransaccion(c *gin.Context) {
 	// Datos antes de borrar
 	desc := t.Descripcion
 	monto := t.Monto
+	cajaID := t.CajaID
 	// borrar
 	if err := DB.Delete(&models.Transaccion{}, t.ID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -462,7 +556,7 @@ func DeleteTransaccion(c *gin.Context) {
 			log.Printf("[DEBUG] DeleteTransaccion update log error: %v", execRes.Error)
 		}
 	}
-	msg := fmt.Sprintf("*TRANSACCION ELIMINADA*\n📪 *ID:* %s\n📄 *Descripcion:* %s\n💲*Monto:* %s\n👤 *Usuario:* %s", id, desc, formatMonto(monto), usuario)
+	msg := fmt.Sprintf("*TRANSACCION ELIMINADA*\n📪 *ID:* %s\n📄 *Descripcion:* %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", id, desc, formatMonto(monto), labelCaja(cajaID), usuario)
 	notify.SendText(msg)
 	c.Status(http.StatusNoContent)
 }
@@ -470,7 +564,7 @@ func DeleteTransaccion(c *gin.Context) {
 // -------------------- CAJA --------------------
 // GetCaja godoc
 // @Summary Obtener saldo en caja
-// @Description Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve el saldo combinado con Odoo.
+// @Description Si solo_caja=true, devuelve solo los saldos locales (caja 1 y caja 2). Si no, devuelve saldos locales y saldos de Odoo (POS) combinados.
 // @Produce json
 // @Param solo_caja query bool false "Solo saldo de caja local (sin Odoo)"
 // @Success 200 {object} models.CajaOdoo
@@ -488,10 +582,17 @@ func GetCaja(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "error obteniendo caja local", "detalle": err.Error()})
 		return
 	}
+	// Obtener también caja id 2 (cuenta bancaria) si existe
+	var caja2 models.Caja
+	if err := DB.First(&caja2, 2).Error; err != nil {
+		// Si no existe, asumimos saldo 0 sin fallar toda la solicitud
+		caja2 = models.Caja{ID: 2, Saldo: 0}
+	}
 	if soloCaja == "true" || soloCaja == "1" {
 		c.JSON(http.StatusOK, gin.H{
 			"id":                   cajaLocal.ID,
 			"saldo_caja":           cajaLocal.Saldo,
+			"saldo_caja2":          caja2.Saldo,
 			"ultima_actualizacion": cajaLocal.UltimaActualizacion,
 		})
 		return
@@ -513,9 +614,10 @@ func GetCaja(c *gin.Context) {
 	resp := models.CajaOdoo{
 		ID:                  1,
 		SaldoCaja:           cajaLocal.Saldo,
+		SaldoCaja2:          caja2.Saldo,
 		Locales:             locales,
 		TotalLocales:        totalLocales,
-		SaldoTotal:          cajaLocal.Saldo + totalLocales,
+		SaldoTotal:          cajaLocal.Saldo + caja2.Saldo + totalLocales,
 		UltimaActualizacion: time.Now(),
 	}
 	c.JSON(http.StatusOK, resp)
@@ -611,6 +713,19 @@ func tipoEmoji(tipo string) string {
 	}
 }
 
+// labelCaja devuelve una etiqueta amigable para la caja según su ID.
+// 1 -> Efectivo, 2 -> Cuenta bancaria, cualquier otro -> "Caja <id>"
+func labelCaja(id uint) string {
+	switch id {
+	case 1:
+		return "Efectivo"
+	case 2:
+		return "Cuenta bancaria"
+	default:
+		return fmt.Sprintf("Caja %d", id)
+	}
+}
+
 // -------------------- NOTIFY --------------------
 // NotifyTest godoc
 // @Summary Enviar mensaje de prueba de notificación
@@ -628,4 +743,151 @@ func NotifyTest(c *gin.Context) {
 	// Enviar y confirmar con 200 (la función interna ya hace logging de errores)
 	notify.SendText(text)
 	c.JSON(http.StatusOK, gin.H{"status": "sent", "text": text})
+}
+
+// -------------------- ODOO --------------------
+type cashOutRequest struct {
+	POSName      string  `json:"pos_name" binding:"required"`
+	Amount       float64 `json:"amount" binding:"required"`
+	CategoryName string  `json:"category_name" binding:"required"`
+	Reason       string  `json:"reason" binding:"required"`
+	Usuario      string  `json:"usuario"`
+	CategoriaID  uint    `json:"categoria_id,omitempty"`
+}
+
+// OdooCashOut godoc
+// @Summary Cash out en Odoo POS
+// @Description Realiza una retirada de caja (cash out) en una sesión de POS abierta en Odoo. Usa credenciales de entorno ODOO_*.
+// @Accept json
+// @Produce json
+// @Param payload body cashOutRequest true "Cash out request (usuario puede ir en body o como query param). Si categoria_id == 16 (Efectivos Puntos de Venta), crea ingreso interno en caja_id=1."
+// @Param usuario query string false "Usuario que realiza el cashout (alternativo a body.usuario)"
+// @Success 200 {object} odoo.CashOutResult
+// @Failure 400 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/odoo/cashout [post]
+func OdooCashOut(c *gin.Context) {
+	var req cashOutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Amount <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount debe ser > 0"})
+		return
+	}
+	// Validar categoría
+	cat := strings.ToUpper(strings.TrimSpace(req.CategoryName))
+	if cat != "GASTO" && cat != "RETIRADA" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "category_name debe ser 'GASTO' o 'RETIRADA'"})
+		return
+	}
+	// Validar razón no vacía
+	if strings.TrimSpace(req.Reason) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "reason no puede estar en blanco"})
+		return
+	}
+	// Determinar usuario (body o query)
+	usuario := strings.TrimSpace(req.Usuario)
+	if usuario == "" {
+		usuario = strings.TrimSpace(c.Query("usuario"))
+	}
+	if usuario == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "usuario es requerido (en body.usuario o query ?usuario=)"})
+		return
+	}
+	// Cargar env Odoo
+	odooURL := strings.TrimSpace(os.Getenv("ODOO_URL"))
+	db := strings.TrimSpace(os.Getenv("ODOO_DB"))
+	user := strings.TrimSpace(os.Getenv("ODOO_USER"))
+	pass := strings.TrimSpace(os.Getenv("ODOO_PASSWORD"))
+	mysqlURI := strings.TrimSpace(os.Getenv("MYSQL_URI"))
+	if odooURL == "" || db == "" || user == "" || pass == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "variables ODOO_* faltantes"})
+		return
+	}
+	// Timeout de operación
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	// Validar existencia de POS; si no existe, devolver lista
+	names, err := odoo.ListPOSNames(ctx, odooURL, db, user, pass)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	found := false
+	for _, n := range names {
+		if n == req.POSName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "pos_name no encontrado", "disponibles": names})
+		return
+	}
+	res, err := odoo.CashOutPOS(ctx, odooURL, db, user, pass, req.POSName, req.Amount, req.Reason, cat, mysqlURI)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Notificaciones y transacción interna según reglas
+	if res.OK {
+		// Siempre enviar mensaje al chat "gastos" indicando la retirada en el POS
+		gastoMsg := fmt.Sprintf("*RETIRADA EN CAJA*\n🏬 *PUNTO DE VENTA:* %s\n💲 *Monto:* %s\n📝 *Razón:* %s", req.POSName, formatMonto(req.Amount), req.Reason)
+		notify.SendTo("retiradas", gastoMsg)
+
+		// Si categoria_id == 16 (Efectivos Puntos de Venta), crear ingreso interno en caja_id=1
+		if req.CategoriaID == 16 {
+			const transferCatID uint = 16
+			var catRec models.Categoria
+			if err := DB.First(&catRec, transferCatID).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de transferencia (ID 16) no existe", "detalle": err.Error()})
+				return
+			}
+			desc := fmt.Sprintf("%s: %s", strings.ReplaceAll(req.POSName, "_", " "), req.Reason)
+			t := models.Transaccion{
+				CategoriaID: transferCatID,
+				CajaID:      1,
+				Monto:       req.Amount,
+				Descripcion: desc,
+				Usuario:     usuario,
+			}
+			if err := DB.Create(&t).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo crear transaccion interna", "detalle": err.Error()})
+				return
+			}
+			// Notificar transacción al chat "atm" (SendText ya usa 'atm')
+			emoji := tipoEmoji(catRec.Tipo)
+			msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", t.ID, t.Descripcion, catRec.Nombre, catRec.Tipo, emoji, formatMonto(t.Monto), labelCaja(t.CajaID), t.Usuario)
+			notify.SendText(msg)
+		}
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// OdooListPOS godoc
+// @Summary Listar nombres de POS en Odoo
+// @Description Devuelve los nombres de los puntos de venta disponibles en Odoo usando las credenciales ODOO_* del entorno.
+// @Produce json
+// @Success 200 {array} string
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/odoo/pos [get]
+func OdooListPOS(c *gin.Context) {
+	odooURL := strings.TrimSpace(os.Getenv("ODOO_URL"))
+	db := strings.TrimSpace(os.Getenv("ODOO_DB"))
+	user := strings.TrimSpace(os.Getenv("ODOO_USER"))
+	pass := strings.TrimSpace(os.Getenv("ODOO_PASSWORD"))
+	if odooURL == "" || db == "" || user == "" || pass == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "variables ODOO_* faltantes"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	names, err := odoo.ListPOSNames(ctx, odooURL, db, user, pass)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, names)
 }

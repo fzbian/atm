@@ -39,7 +39,7 @@ func SendMovement(action, entity, detail string) {
 	}
 	endpoint := buildSendURL(base)
 	msg := fmt.Sprintf("%s %s: %s", action, entity, detail)
-	send(endpoint, msg)
+	sendTo(endpoint, "atm", msg)
 }
 
 // SendText envía un mensaje de texto arbitrario usando las credenciales del .env
@@ -50,7 +50,21 @@ func SendText(text string) {
 		return
 	}
 	endpoint := buildSendURL(base)
-	send(endpoint, text)
+	sendTo(endpoint, "atm", text)
+}
+
+// SendTo envía un mensaje de texto al chat indicado
+func SendTo(chat, text string) {
+	base := strings.TrimRight(getEnvAny("NOTIFY_URL"), "/")
+	if base == "" {
+		fmt.Printf("[NOTIFY] configuración incompleta (url=%t)\n", base != "")
+		return
+	}
+	endpoint := buildSendURL(base)
+	if strings.TrimSpace(chat) == "" {
+		chat = "atm"
+	}
+	sendTo(endpoint, chat, text)
 }
 
 // buildSendURL arma la URL final para enviar texto
@@ -60,8 +74,8 @@ func buildSendURL(base string) string {
 }
 
 // send ejecuta el POST con el nuevo formato {chat:"atm", message:"..."}
-func send(endpoint, message string) {
-	payload := Payload{Chat: "atm", Message: message}
+func sendTo(endpoint, chat, message string) {
+	payload := Payload{Chat: chat, Message: message}
 	b, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(b))
 	if err != nil {

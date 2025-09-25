@@ -14,6 +14,7 @@ type Caja struct {
 type CajaOdoo struct {
 	ID                  uint               `json:"id"`
 	SaldoCaja           float64            `json:"saldo_caja"`
+	SaldoCaja2          float64            `json:"saldo_caja2"`
 	Locales             map[string]float64 `json:"locales"`
 	TotalLocales        float64            `json:"total_locales"`
 	SaldoTotal          float64            `json:"saldo_total"`

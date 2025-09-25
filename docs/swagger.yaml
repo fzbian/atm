@@ -1,5 +1,23 @@
 basePath: /
 definitions:
+  controllers.cashOutRequest:
+    properties:
+      amount:
+        type: number
+      category_name:
+        type: string
+      pos_name:
+        type: string
+      reason:
+        type: string
+      usuario:
+        type: string
+    required:
+    - amount
+    - category_name
+    - pos_name
+    - reason
+    type: object
   models.Caja:
     properties:
       id:
@@ -19,6 +37,8 @@ definitions:
           type: number
         type: object
       saldo_caja:
+        type: number
+      saldo_caja2:
         type: number
       saldo_total:
         type: number
@@ -57,6 +77,8 @@ definitions:
     type: object
   models.Transaccion:
     properties:
+      caja_id:
+        type: integer
       categoria_id:
         type: integer
       descripcion:
@@ -72,6 +94,8 @@ definitions:
     type: object
   models.TransaccionCreateInput:
     properties:
+      caja_id:
+        type: integer
       categoria_id:
         type: integer
       descripcion:
@@ -81,6 +105,7 @@ definitions:
       usuario:
         type: string
     required:
+    - caja_id
     - categoria_id
     - descripcion
     - monto
@@ -88,12 +113,27 @@ definitions:
     type: object
   models.TransaccionUpdateInput:
     properties:
+      caja_id:
+        type: integer
       categoria_id:
         type: integer
       descripcion:
         type: string
       monto:
         type: number
+    type: object
+  odoo.CashOutResult:
+    properties:
+      message:
+        type: string
+      mysql:
+        type: boolean
+      mysql_error:
+        type: string
+      ok:
+        type: boolean
+      session_id:
+        type: integer
     type: object
 host: localhost:8080
 info:
@@ -107,8 +147,8 @@ info:
 paths:
   /api/caja:
     get:
-      description: Si solo_caja=true, devuelve solo el saldo local. Si no, devuelve
-        el saldo combinado con Odoo.
+      description: Si solo_caja=true, devuelve solo los saldos locales (caja 1 y caja
+        2). Si no, devuelve saldos locales y saldos de Odoo (POS) combinados.
       parameters:
       - description: Solo saldo de caja local (sin Odoo)
         in: query
@@ -296,8 +336,8 @@ paths:
       summary: Listar logs de transacciones
   /api/notify/test:
     get:
-      description: Envía un mensaje de prueba usando las variables de entorno NOTIFY_*.
-        Por defecto envía "ping".
+      description: Envía un mensaje de prueba al chat fijo 'atm' usando NOTIFY_URL
+        (nuevo formato /whatsapp/send-text). Por defecto envía "ping".
       parameters:
       - description: Texto a enviar
         in: query
@@ -317,6 +357,60 @@ paths:
             additionalProperties: true
             type: object
       summary: Enviar mensaje de prueba de notificación
+  /api/odoo/cashout:
+    post:
+      consumes:
+      - application/json
+      description: Realiza una retirada de caja (cash out) en una sesión de POS abierta
+        en Odoo. Usa credenciales de entorno ODOO_*.
+      parameters:
+      - description: Cash out request (usuario puede ir en body o como query param)
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.cashOutRequest'
+      - description: Usuario que realiza el cashout (alternativo a body.usuario)
+        in: query
+        name: usuario
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/odoo.CashOutResult'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Cash out en Odoo POS
+  /api/odoo/pos:
+    get:
+      description: Devuelve los nombres de los puntos de venta disponibles en Odoo
+        usando las credenciales ODOO_* del entorno.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Listar nombres de POS en Odoo
   /api/resumen:
     get:
       produces:
@@ -352,6 +446,10 @@ paths:
         in: query
         name: tipo
         type: string
+      - description: Filtrar por ID de caja
+        in: query
+        name: caja_id
+        type: integer
       - description: Buscar por descripcion (texto parcial)
         in: query
         name: descripcion
@@ -380,7 +478,7 @@ paths:
       consumes:
       - application/json
       parameters:
-      - description: Transaccion
+      - description: Transaccion (requiere caja_id)
         in: body
         name: transaccion
         required: true
@@ -467,7 +565,8 @@ paths:
         name: id
         required: true
         type: integer
-      - description: Campos a actualizar (parcial)
+      - description: Campos a actualizar (parcial). Debe incluir caja_id en body o
+          query.
         in: body
         name: transaccion
         schema:
@@ -477,6 +576,10 @@ paths:
         name: usuario
         required: true
         type: string
+      - description: ID de caja (obligatorio si no se envía en el body)
+        in: query
+        name: caja_id
+        type: integer
       produces:
       - application/json
       responses:

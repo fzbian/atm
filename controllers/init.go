@@ -68,6 +68,15 @@ func RegisterNotifyRoutes(rg *gin.RouterGroup) {
 	}
 }
 
+// RegisterOdooRoutes registra rutas relacionadas con Odoo
+func RegisterOdooRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/odoo")
+	{
+		r.POST("/cashout", OdooCashOut)
+		r.GET("/pos", OdooListPOS)
+	}
+}
+
 // RegisterLimpiarRoutes registra la ruta para limpiar la base de datos
 func RegisterLimpiarRoutes(rg *gin.RouterGroup) {
 	r := rg.Group("/limpiar")
