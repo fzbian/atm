@@ -891,3 +891,109 @@ func OdooListPOS(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, names)
 }
+
+// -------------------- CUENTA BANCARIA --------------------
+type RetiroCuentaRequest struct {
+	Monto       float64 `json:"monto" binding:"required"`
+	Descripcion string  `json:"descripcion" binding:"required"`
+	Usuario     string  `json:"usuario" binding:"required"`
+}
+
+// RetiroCuenta godoc
+// @Summary Retiro en cuenta bancaria (caja_2) con ingreso automático en efectivo (caja_1)
+// @Description Crea un EGRESO en caja_id=2 por el monto indicado y, en la misma operación, crea un INGRESO en caja_id=1 por el mismo monto. La operación es atómica.
+// @Accept json
+// @Produce json
+// @Param payload body RetiroCuentaRequest true "Datos del retiro desde la cuenta bancaria (usa categorias fijas: egreso=30, ingreso=20)"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{}
+// @Failure 409 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/cuenta/retiro [post]
+func RetiroCuenta(c *gin.Context) {
+	var req RetiroCuentaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Monto <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "monto debe ser > 0"})
+		return
+	}
+	// Categorías fijas: egreso=30, ingreso=20
+	const egresoCatID uint = 30
+	const ingresoCatID uint = 20
+	var catEg models.Categoria
+	if err := DB.First(&catEg, egresoCatID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de egreso (ID 30) no existe", "detalle": err.Error()})
+		return
+	}
+	if strings.ToUpper(catEg.Tipo) != "EGRESO" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de egreso (ID 30) no es de tipo EGRESO"})
+		return
+	}
+	var catIn models.Categoria
+	if err := DB.First(&catIn, ingresoCatID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de ingreso (ID 20) no existe", "detalle": err.Error()})
+		return
+	}
+	if strings.ToUpper(catIn.Tipo) != "INGRESO" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de ingreso (ID 20) no es de tipo INGRESO"})
+		return
+	}
+	// Validar caja 2 y saldo suficiente
+	var caja2 models.Caja
+	if err := DB.First(&caja2, 2).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "caja_2 no existe"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if caja2.Saldo < req.Monto {
+		c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la cuenta bancaria (caja_2)", "saldo_actual": caja2.Saldo, "monto_solicitado": req.Monto})
+		return
+	}
+	// Transacción atómica
+	var tEgreso, tIngreso models.Transaccion
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		tEgreso = models.Transaccion{
+			CategoriaID: egresoCatID,
+			CajaID:      2,
+			Monto:       req.Monto,
+			Descripcion: req.Descripcion,
+			Usuario:     req.Usuario,
+		}
+		if err := tx.Create(&tEgreso).Error; err != nil {
+			return err
+		}
+		tIngreso = models.Transaccion{
+			CategoriaID: ingresoCatID,
+			CajaID:      1,
+			Monto:       req.Monto,
+			Descripcion: "Ingreso por retiro desde Cuenta bancaria",
+			Usuario:     req.Usuario,
+		}
+		if err := tx.Create(&tIngreso).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo completar el retiro/ingreso", "detalle": err.Error()})
+		return
+	}
+	// Notificaciones
+	emojiEg := tipoEmoji(catEg.Tipo)
+	msgEg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", tEgreso.ID, tEgreso.Descripcion, catEg.Nombre, catEg.Tipo, emojiEg, formatMonto(tEgreso.Monto), labelCaja(tEgreso.CajaID), tEgreso.Usuario)
+	notify.SendText(msgEg)
+	emojiIn := tipoEmoji(catIn.Tipo)
+	msgIn := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", tIngreso.ID, tIngreso.Descripcion, catIn.Nombre, catIn.Tipo, emojiIn, formatMonto(tIngreso.Monto), labelCaja(tIngreso.CajaID), tIngreso.Usuario)
+	notify.SendText(msgIn)
+
+	c.JSON(http.StatusOK, gin.H{
+		"egreso":  tEgreso,
+		"ingreso": tIngreso,
+	})
+}

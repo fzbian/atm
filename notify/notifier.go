@@ -62,7 +62,7 @@ func SendTo(chat, text string) {
 	}
 	endpoint := buildSendURL(base)
 	if strings.TrimSpace(chat) == "" {
-		chat = "atm"
+		chat = "retiradas"
 	}
 	sendTo(endpoint, chat, text)
 }

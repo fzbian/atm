@@ -77,6 +77,14 @@ func RegisterOdooRoutes(rg *gin.RouterGroup) {
 	}
 }
 
+// RegisterCuentaRoutes registra rutas de cuenta bancaria
+func RegisterCuentaRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/cuenta")
+	{
+		r.POST("/retiro", RetiroCuenta)
+	}
+}
+
 // RegisterLimpiarRoutes registra la ruta para limpiar la base de datos
 func RegisterLimpiarRoutes(rg *gin.RouterGroup) {
 	r := rg.Group("/limpiar")

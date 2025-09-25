@@ -66,6 +66,7 @@ func main() {
 		controllers.RegisterResumenRoutes(api)
 		controllers.RegisterNotifyRoutes(api)
 		controllers.RegisterOdooRoutes(api)
+		controllers.RegisterCuentaRoutes(api)
 		controllers.RegisterLimpiarRoutes(api)
 	}
 

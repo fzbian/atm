@@ -246,6 +246,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cuenta/retiro": {
+            "post": {
+                "description": "Crea un EGRESO en caja_id=2 por el monto indicado y, en la misma operación, crea un INGRESO en caja_id=1 por el mismo monto. La operación es atómica.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "summary": "Retiro en cuenta bancaria (caja_2) con ingreso automático en efectivo (caja_1)",
+                "parameters": [
+                    {
+                        "description": "Datos del retiro desde la cuenta bancaria (usa categorias fijas: egreso=30, ingreso=20)",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.RetiroCuentaRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/api/limpiar": {
             "post": {
                 "description": "Elimina todas las transacciones, logs, caja, y categorías (deja la estructura vacía)",
@@ -343,7 +396,7 @@ const docTemplate = `{
                 "summary": "Cash out en Odoo POS",
                 "parameters": [
                     {
-                        "description": "Cash out request (usuario puede ir en body o como query param)",
+                        "description": "Cash out request (usuario puede ir en body o como query param). Si categoria_id == 16 (Efectivos Puntos de Venta), crea ingreso interno en caja_id=1.",
                         "name": "payload",
                         "in": "body",
                         "required": true,
@@ -696,6 +749,25 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "controllers.RetiroCuentaRequest": {
+            "type": "object",
+            "required": [
+                "descripcion",
+                "monto",
+                "usuario"
+            ],
+            "properties": {
+                "descripcion": {
+                    "type": "string"
+                },
+                "monto": {
+                    "type": "number"
+                },
+                "usuario": {
+                    "type": "string"
+                }
+            }
+        },
         "controllers.cashOutRequest": {
             "type": "object",
             "required": [
@@ -707,6 +779,9 @@ const docTemplate = `{
             "properties": {
                 "amount": {
                     "type": "number"
+                },
+                "categoria_id": {
+                    "type": "integer"
                 },
                 "category_name": {
                     "type": "string"
