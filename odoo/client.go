@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"atm/models"
 )
 
 type Client struct {
@@ -156,8 +158,8 @@ func buildNamePrefixDomain(prefixes []string) []interface{} {
 // 2. Obtiene sesiones abiertas/abriendo por esos config_id (orden desc) y toma la más reciente por local.
 // 3. Para locales sin sesión abierta, obtiene la sesión cerrada más reciente.
 // 4. Calcula balance según estado: opened/opening_control -> cash_register_balance_end; closed -> cash_register_balance_end_real.
-func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
-	prefixes := []string{"Gran San", "Visto", "Lo Nuestro", "Burbuja", "San Jose", "Medellin"}
+func (c *Client) FetchPOSBalances() (map[string]models.POSLocalDetail, float64, error) {
+	prefixes := []string{"Gran San", "Visto", "Lo Nuestro", "Burbuja", "San Jose", "Medellin", "Titanium"}
 
 	cfgDomain := buildNamePrefixDomain(prefixes)
 	cfgFields := []string{"name"}
@@ -171,7 +173,7 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 		return nil, 0, fmt.Errorf("config decode: %w", err)
 	}
 	if len(cfgs) == 0 {
-		return map[string]float64{}, 0, nil
+		return map[string]models.POSLocalDetail{}, 0, nil
 	}
 
 	configIDs := make([]int64, 0, len(cfgs))
@@ -186,7 +188,7 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 		}
 	}
 	if len(configIDs) == 0 {
-		return map[string]float64{}, 0, nil
+		return map[string]models.POSLocalDetail{}, 0, nil
 	}
 
 	// Helper dominio config_ids IN
@@ -201,7 +203,7 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 	// Paso 2: sesiones abiertas / opening_control
 	openDomain := makeInDomain(configIDs)
 	openDomain = append(openDomain, []interface{}{"state", "in", []interface{}{"opened", "opening_control"}})
-	sessFields := []string{"config_id", "state", "cash_register_balance_end_real", "cash_register_balance_end"}
+	sessFields := []string{"id", "config_id", "state", "cash_register_balance_end_real", "cash_register_balance_end"}
 	openKw := map[string]interface{}{"domain": openDomain, "fields": sessFields, "limit": len(configIDs) * 3, "order": "id desc"}
 	rawOpen, err := c.callOdoo("pos.session", "search_read", []interface{}{}, openKw)
 	if err != nil {
@@ -213,6 +215,7 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 	}
 
 	chosen := make(map[int64]map[string]interface{})
+	openSessionIDs := make([]int64, 0)
 	for _, s := range openSessions {
 		cfgID := extractConfigID(s)
 		if cfgID == 0 {
@@ -220,6 +223,11 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 		}
 		if _, exists := chosen[cfgID]; !exists { // primera (orden desc => más reciente)
 			chosen[cfgID] = s
+			if st := fmt.Sprintf("%v", s["state"]); st == "opened" || st == "opening_control" {
+				if sid := extractSessionID(s); sid != 0 {
+					openSessionIDs = append(openSessionIDs, sid)
+				}
+			}
 		}
 	}
 
@@ -244,19 +252,52 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 					}
 					if _, exists := chosen[cfgID]; !exists {
 						chosen[cfgID] = s
+						if st := fmt.Sprintf("%v", s["state"]); st == "opened" || st == "opening_control" {
+							if sid := extractSessionID(s); sid != 0 {
+								openSessionIDs = append(openSessionIDs, sid)
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Paso 4: calcular balances
-	locales := make(map[string]float64)
+	// Paso 4: obtener ventas por sesión abierta (read_group en pos.order)
+	salesBySession := make(map[int64]float64)
+	if len(openSessionIDs) > 0 {
+		domain := []interface{}{[]interface{}{"session_id", "in", toInterfaceSlice(openSessionIDs)}}
+		fields := []interface{}{"amount_total"}
+		groupBy := []interface{}{"session_id"}
+		args := []interface{}{domain, fields, groupBy}
+		rawSales, errSales := c.callOdoo("pos.order", "read_group", args, map[string]interface{}{"lazy": false})
+		if errSales == nil {
+			var salesRows []map[string]interface{}
+			if errDecode := json.Unmarshal(rawSales, &salesRows); errDecode == nil {
+				for _, row := range salesRows {
+					sid := extractIDFromGroup(row["session_id"])
+					if sid == 0 {
+						continue
+					}
+					salesBySession[sid] = numberAsFloat(row["amount_total"])
+				}
+			}
+		}
+	}
+
+	// Paso 5: calcular balances y ventas por local
+	locales := make(map[string]models.POSLocalDetail)
 	var total float64
 	for cfgID, sess := range chosen {
 		name := nameByID[cfgID]
 		key := normalizeLocalKey(name)
 		state := fmt.Sprintf("%v", sess["state"])
+		estado := "cerrada"
+		if state == "opened" {
+			estado = "abierta"
+		} else if state == "opening_control" {
+			estado = "abriendo"
+		}
 		var balance float64
 		if state == "opened" || state == "opening_control" {
 			balance = numberAsFloat(sess["cash_register_balance_end"])
@@ -271,7 +312,24 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 				balance = numberAsFloat(sess["cash_register_balance_end"])
 			}
 		}
-		locales[key] += balance
+
+		info := locales[key]
+		info.SaldoEnCaja += balance
+		// Priorizar estados abiertos sobre cerrados cuando se combinan múltiples configs
+		if info.EstadoSesion == "" || (info.EstadoSesion == "cerrada" && (estado == "abierta" || estado == "abriendo")) {
+			info.EstadoSesion = estado
+		}
+		if state == "opened" || state == "opening_control" {
+			sid := extractSessionID(sess)
+			if sid != 0 {
+				v := salesBySession[sid]
+				if info.Vendido == nil {
+					info.Vendido = new(float64)
+				}
+				*info.Vendido += v
+			}
+		}
+		locales[key] = info
 		total += balance
 	}
 	// Agregar explícitamente configs sin sesión (balance 0) para que aparezcan en respuesta
@@ -279,7 +337,7 @@ func (c *Client) FetchPOSBalances() (map[string]float64, float64, error) {
 		if _, ok := chosen[cfgID]; !ok {
 			key := normalizeLocalKey(nameByID[cfgID])
 			if _, exists := locales[key]; !exists {
-				locales[key] = 0
+				locales[key] = models.POSLocalDetail{SaldoEnCaja: 0, EstadoSesion: "sin_sesion"}
 			}
 		}
 	}
@@ -295,9 +353,35 @@ func extractConfigID(sess map[string]interface{}) int64 {
 	return 0
 }
 
+func extractSessionID(sess map[string]interface{}) int64 {
+	if idf, ok := sess["id"].(float64); ok {
+		return int64(idf)
+	}
+	return 0
+}
+
+func extractIDFromGroup(v interface{}) int64 {
+	if arr, ok := v.([]interface{}); ok && len(arr) > 0 {
+		if idf, ok2 := arr[0].(float64); ok2 {
+			return int64(idf)
+		}
+	}
+	return 0
+}
+
+func toInterfaceSlice(ids []int64) []interface{} {
+	out := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, id)
+	}
+	return out
+}
+
 func normalizeLocalKey(name string) string {
 	lower := strings.ToLower(name)
 	switch {
+	case strings.HasPrefix(lower, "titanium"):
+		return "titanium"
 	case strings.HasPrefix(lower, "visto"):
 		return "visto"
 	case strings.HasPrefix(lower, "burbuja"):

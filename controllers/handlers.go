@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -606,18 +607,35 @@ func GetCaja(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo autenticar en Odoo", "detalle": err.Error()})
 		return
 	}
-	locales, totalLocales, err := client.FetchPOSBalances()
+	locales, _, err := client.FetchPOSBalances()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo obtener saldos filtrados de Odoo", "detalle": err.Error()})
 		return
+	}
+	truncateToPeso := func(v float64) float64 {
+		if v >= 0 {
+			return math.Floor(v)
+		}
+		return math.Ceil(v)
+	}
+	localesEnteros := make(map[string]models.POSLocalDetail, len(locales))
+	var totalLocalesEnteros float64
+	for k, v := range locales {
+		v.SaldoEnCaja = truncateToPeso(v.SaldoEnCaja)
+		if v.Vendido != nil {
+			val := truncateToPeso(*v.Vendido)
+			v.Vendido = &val
+		}
+		localesEnteros[k] = v
+		totalLocalesEnteros += v.SaldoEnCaja
 	}
 	resp := models.CajaOdoo{
 		ID:                  1,
 		SaldoCaja:           cajaLocal.Saldo,
 		SaldoCaja2:          caja2.Saldo,
-		Locales:             locales,
-		TotalLocales:        totalLocales,
-		SaldoTotal:          cajaLocal.Saldo + caja2.Saldo + totalLocales,
+		Locales:             localesEnteros,
+		TotalLocales:        totalLocalesEnteros,
+		SaldoTotal:          cajaLocal.Saldo + caja2.Saldo + totalLocalesEnteros,
 		UltimaActualizacion: time.Now(),
 	}
 	c.JSON(http.StatusOK, resp)
