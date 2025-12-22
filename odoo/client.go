@@ -385,7 +385,7 @@ func normalizeLocalKey(name string) string {
 	case strings.HasPrefix(lower, "visto"):
 		return "visto"
 	case strings.HasPrefix(lower, "burbuja"):
-		return "burbuja"
+		return "burbuja_lo_nuestro"
 	case strings.HasPrefix(lower, "lo nuestro"):
 		return "lo_nuestro"
 	case strings.HasPrefix(lower, "gran san"):
