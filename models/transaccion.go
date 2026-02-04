@@ -5,9 +5,9 @@ import "time"
 // Transaccion representa la tabla transacciones
 // Ahora incluye el campo usuario
 type Transaccion struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	CategoriaID uint      `gorm:"column:categoria_id;not null" json:"categoria_id"`
-	CajaID      uint      `gorm:"column:caja_id;not null" json:"caja_id"`
+	ID          int32     `gorm:"primaryKey;type:int" json:"id"`
+	CategoriaID int32     `gorm:"column:categoria_id;type:int;not null" json:"categoria_id"`
+	CajaID      int32     `gorm:"column:caja_id;type:int;not null" json:"caja_id"`
 	Monto       float64   `gorm:"type:decimal(15,2);not null" json:"monto"`
 	Fecha       time.Time `gorm:"column:fecha;autoCreateTime" json:"fecha"`
 	Descripcion string    `gorm:"type:text;not null" json:"descripcion"`
@@ -17,8 +17,8 @@ type Transaccion struct {
 // TransaccionCreateInput limita los campos permitidos al crear una transacción (id y fecha se generan automáticamente)
 // Ahora usuario es obligatorio
 type TransaccionCreateInput struct {
-	CategoriaID uint    `json:"categoria_id" binding:"required"`
-	CajaID      uint    `json:"caja_id" binding:"required"`
+	CategoriaID int32   `json:"categoria_id" binding:"required"`
+	CajaID      int32   `json:"caja_id" binding:"required"`
 	Monto       float64 `json:"monto" binding:"required"`
 	Descripcion string  `json:"descripcion" binding:"required"`
 	Usuario     string  `json:"usuario" binding:"required"`
@@ -27,8 +27,8 @@ type TransaccionCreateInput struct {
 // TransaccionUpdateInput ahora usa punteros para distinguir campos omitidos
 // (solo se actualizan los que lleguen no nulos)
 type TransaccionUpdateInput struct {
-	CategoriaID *uint    `json:"categoria_id,omitempty"`
-	CajaID      *uint    `json:"caja_id,omitempty"`
+	CategoriaID *int32   `json:"categoria_id,omitempty"`
+	CajaID      *int32   `json:"caja_id,omitempty"`
 	Monto       *float64 `json:"monto,omitempty"`
 	Descripcion *string  `json:"descripcion,omitempty"`
 }

@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"net/http"
 	"os"
@@ -288,40 +287,97 @@ func CreateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// Obtener tipo de la categoria
+
+	var transaccion models.Transaccion
 	var categoria models.Categoria
-	if err := DB.First(&categoria, input.CategoriaID).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "categoria no encontrada"})
-		return
-	}
-	// Validar caja existente
-	var caja models.Caja
-	if err := DB.First(&caja, input.CajaID).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "caja no encontrada"})
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Obtener Categoría
+		if err := tx.First(&categoria, input.CategoriaID).Error; err != nil {
+			return fmt.Errorf("categoria no encontrada") // Simplificado para devolver error genérico si falla
+		}
+
+		// 2. Obtener y Bloquear Caja (para evitar condiciones de carrera)
+		var caja models.Caja
+		// Clauses(clause.Locking{Strength: "UPDATE"}) sería ideal, pero GORM básico:
+		if err := tx.First(&caja, input.CajaID).Error; err != nil {
+			return fmt.Errorf("caja no encontrada")
+		}
+
+		// 3. Validar saldo si es EGRESO
+		isEgreso := strings.ToUpper(categoria.Tipo) == "EGRESO"
+		if isEgreso {
+			if caja.Saldo < input.Monto {
+				// Retornamos un error especial para manejar el 409 fuera
+				return fmt.Errorf("saldo_insuficiente|%f|%f", caja.Saldo, input.Monto)
+			}
+		}
+
+		// 4. Crear Transacción
+		transaccion = models.Transaccion{
+			CategoriaID: input.CategoriaID,
+			CajaID:      input.CajaID,
+			Monto:       input.Monto,
+			Descripcion: input.Descripcion,
+			Usuario:     input.Usuario,
+		}
+		if err := tx.Create(&transaccion).Error; err != nil {
+			return err
+		}
+
+		// 5. Actualizar Saldo Caja
+		saldoAntes := caja.Saldo
+		var newSaldo float64
+		if isEgreso {
+			newSaldo = caja.Saldo - input.Monto
+		} else {
+			// INGRESO
+			newSaldo = caja.Saldo + input.Monto
+		}
+
+		if err := tx.Model(&caja).Update("saldo", newSaldo).Error; err != nil {
+			return err
+		}
+
+		// 6. Generar Log (Reemplazo de Trigger)
+		logEntry := models.TransaccionLog{
+			TransaccionID: transaccion.ID,
+			Accion:        "INSERT",
+			Usuario:       input.Usuario,
+			Detalle:       fmt.Sprintf("Creación de %s %s por %s", categoria.Tipo, categoria.Nombre, formatMonto(input.Monto)),
+			SaldoAntes:    saldoAntes,
+			SaldoDespues:  newSaldo,
+		}
+		if err := tx.Create(&logEntry).Error; err != nil {
+			return err // Fallar transacción si no se puede loguear
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		// Manejo de errores
+		errMsg := err.Error()
+		if strings.HasPrefix(errMsg, "saldo_insuficiente") {
+			parts := strings.Split(errMsg, "|")
+			saldo, _ := strconv.ParseFloat(parts[1], 64)
+			monto, _ := strconv.ParseFloat(parts[2], 64)
+			c.JSON(http.StatusConflict, gin.H{
+				"error":            "Saldo insuficiente en la caja para realizar el egreso",
+				"saldo_actual":     saldo,
+				"monto_solicitado": monto,
+				"caja_id":          input.CajaID,
+			})
+			return
+		}
+		if errMsg == "categoria no encontrada" || errMsg == "caja no encontrada" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": errMsg})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Si es EGRESO, validar saldo suficiente en esa caja
-	if categoria.Tipo == "EGRESO" {
-		if caja.Saldo < input.Monto {
-			c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja para realizar el egreso", "saldo_actual": caja.Saldo, "monto_solicitado": input.Monto, "caja_id": input.CajaID})
-			return
-		}
-	}
-	transaccion := models.Transaccion{
-		CategoriaID: input.CategoriaID,
-		CajaID:      input.CajaID,
-		Monto:       input.Monto,
-		Descripcion: input.Descripcion,
-		Usuario:     input.Usuario,
-	}
-	if err := DB.Create(&transaccion).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+
 	emoji := tipoEmoji(categoria.Tipo)
 	msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", transaccion.ID, transaccion.Descripcion, categoria.Nombre, categoria.Tipo, emoji, formatMonto(transaccion.Monto), labelCaja(transaccion.CajaID), transaccion.Usuario)
 	notify.SendText(msg)
@@ -363,6 +419,15 @@ func GetTransaccion(c *gin.Context) {
 // @Failure 404 {object} map[string]interface{}
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/transacciones/{id} [put]
+// UpdateTransaccion godoc
+// @Summary Actualizar transaccion
+// @Produce json
+// @Param id path int true "ID"
+// @Param usuario query string true "Usuario que actualiza"
+// @Success 200 {object} models.Transaccion
+// @Failure 404 {object} map[string]interface{}
+// @Failure 500 {object} map[string]interface{}
+// @Router /api/transacciones/{id} [put]
 func UpdateTransaccion(c *gin.Context) {
 	id := c.Param("id")
 	usuario := c.Query("usuario")
@@ -370,149 +435,215 @@ func UpdateTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "parametro 'usuario' es requerido"})
 		return
 	}
-	var t models.Transaccion
-	if err := DB.First(&t, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			c.JSON(http.StatusNotFound, gin.H{"error": "transaccion no encontrada"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	oldCat := t.CategoriaID
-	oldMonto := t.Monto
-	oldDesc := t.Descripcion
+
 	var input models.TransaccionUpdateInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// caja_id es obligatorio (ya sea en body o como query param)
-	var cajaID uint
-	if input.CajaID != nil {
-		cajaID = *input.CajaID
-	} else {
-		if s := strings.TrimSpace(c.Query("caja_id")); s != "" {
-			if v, err := strconv.Atoi(s); err == nil && v > 0 {
-				cajaID = uint(v)
+
+	var updatedT models.Transaccion
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var t models.Transaccion
+		if err := tx.First(&t, id).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("transaccion no encontrada")
+			}
+			return err
+		}
+
+		// 1. Capturar Estado Anterior
+		oldCatID := t.CategoriaID
+		oldCajaID := t.CajaID
+		oldMonto := t.Monto
+		oldDesc := t.Descripcion
+
+		var oldCat models.Categoria
+		if err := tx.First(&oldCat, oldCatID).Error; err != nil {
+			return fmt.Errorf("categoria anterior no encontrada")
+		}
+		var oldCaja models.Caja
+		if err := tx.First(&oldCaja, oldCajaID).Error; err != nil {
+			return fmt.Errorf("caja anterior no encontrada")
+		}
+
+		// 2. Determinar Nuevos Valores
+		newCatID := oldCatID
+		if input.CategoriaID != nil {
+			newCatID = *input.CategoriaID
+		}
+		newCajaID := oldCajaID
+		if input.CajaID != nil {
+			newCajaID = *input.CajaID
+		} else if qCaja := c.Query("caja_id"); qCaja != "" {
+			if v, err := strconv.Atoi(qCaja); err == nil && v > 0 {
+				newCajaID = int32(v)
 			}
 		}
-	}
-	if cajaID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "caja_id es requerido para actualizar"})
-		return
-	}
-	// Validar caja existente
-	{
-		var caja models.Caja
-		if err := DB.First(&caja, cajaID).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "caja no encontrada"})
-				return
+
+		newMonto := oldMonto
+		if input.Monto != nil {
+			newMonto = *input.Monto
+		}
+		newDesc := oldDesc
+		if input.Descripcion != nil {
+			newDesc = *input.Descripcion
+		}
+
+		var newCat models.Categoria
+		if newCatID == oldCatID {
+			newCat = oldCat
+		} else {
+			if err := tx.First(&newCat, newCatID).Error; err != nil {
+				return fmt.Errorf("nueva categoria no encontrada")
 			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+
+		var newCaja models.Caja
+		if newCajaID == oldCajaID {
+			newCaja = oldCaja
+			if err := tx.First(&newCaja, newCajaID).Error; err != nil {
+				return fmt.Errorf("nueva caja no encontrada")
+			}
+		} else {
+			if err := tx.First(&newCaja, newCajaID).Error; err != nil {
+				return fmt.Errorf("nueva caja no encontrada")
+			}
+		}
+
+		// 3. Lógica de Reversión y Aplicación
+		// A. Revertir impacto anterior en oldCaja
+		saldoTrasRevertir := oldCaja.Saldo
+		if strings.ToUpper(oldCat.Tipo) == "EGRESO" {
+			saldoTrasRevertir += oldMonto
+		} else {
+			saldoTrasRevertir -= oldMonto
+		}
+
+		// B. Aplicar impacto nuevo
+		var saldoFinal float64
+		if oldCajaID == newCajaID {
+			saldoFinal = saldoTrasRevertir
+			if strings.ToUpper(newCat.Tipo) == "EGRESO" {
+				if saldoFinal < newMonto {
+					return fmt.Errorf("saldo_insuficiente|%f|%f", saldoFinal, newMonto)
+				}
+				saldoFinal -= newMonto
+			} else {
+				saldoFinal += newMonto
+			}
+			if err := tx.Model(&models.Caja{}).Where("id = ?", oldCajaID).Update("saldo", saldoFinal).Error; err != nil {
+				return err
+			}
+		} else {
+			// Cajas Distintas
+			if err := tx.Model(&models.Caja{}).Where("id = ?", oldCajaID).Update("saldo", saldoTrasRevertir).Error; err != nil {
+				return err
+			}
+			saldoFinal = newCaja.Saldo
+			if strings.ToUpper(newCat.Tipo) == "EGRESO" {
+				if saldoFinal < newMonto {
+					return fmt.Errorf("saldo_insuficiente|%f|%f|%d", saldoFinal, newMonto, newCajaID)
+				}
+				saldoFinal -= newMonto
+			} else {
+				saldoFinal += newMonto
+			}
+			if err := tx.Model(&models.Caja{}).Where("id = ?", newCajaID).Update("saldo", saldoFinal).Error; err != nil {
+				return err
+			}
+		}
+
+		// 4. Actualizar Transacción
+		updates := map[string]interface{}{
+			"categoria_id": newCatID,
+			"caja_id":      newCajaID,
+			"monto":        newMonto,
+			"descripcion":  newDesc,
+		}
+		if err := tx.Model(&t).Updates(updates).Error; err != nil {
+			return err
+		}
+
+		// 5. Generar Log
+		saldoAntesLog := newCaja.Saldo
+		if oldCajaID == newCajaID {
+			saldoAntesLog = oldCaja.Saldo
+		}
+
+		logDetails := []string{}
+		if oldMonto != newMonto {
+			logDetails = append(logDetails, fmt.Sprintf("Monto: %s -> %s", formatMonto(oldMonto), formatMonto(newMonto)))
+		}
+		if oldDesc != newDesc {
+			logDetails = append(logDetails, fmt.Sprintf("Desc: %s -> %s", oldDesc, newDesc))
+		}
+		if oldCatID != newCatID {
+			logDetails = append(logDetails, fmt.Sprintf("Cat: %s -> %s", oldCat.Nombre, newCat.Nombre))
+		}
+		if oldCajaID != newCajaID {
+			logDetails = append(logDetails, fmt.Sprintf("Caja: %s -> %s", labelCaja(oldCajaID), labelCaja(newCajaID)))
+		}
+
+		detailStr := "Actualización: " + strings.Join(logDetails, ", ")
+		if len(logDetails) == 0 {
+			detailStr = "Actualización sin cambios sustanciales"
+		}
+
+		logEntry := models.TransaccionLog{
+			TransaccionID: t.ID,
+			Accion:        "UPDATE",
+			Usuario:       usuario,
+			Detalle:       detailStr,
+			SaldoAntes:    saldoAntesLog,
+			SaldoDespues:  saldoFinal,
+		}
+		if err := tx.Create(&logEntry).Error; err != nil {
+			return err
+		}
+
+		updatedT = t
+		updatedT.CategoriaID = newCatID
+		updatedT.CajaID = newCajaID
+		updatedT.Monto = newMonto
+		updatedT.Descripcion = newDesc
+		return nil
+	})
+
+	if err != nil {
+		errMsg := err.Error()
+		if strings.HasPrefix(errMsg, "saldo_insuficiente") {
+			parts := strings.Split(errMsg, "|")
+			saldo, _ := strconv.ParseFloat(parts[1], 64)
+			monto, _ := strconv.ParseFloat(parts[2], 64)
+			cID := input.CajaID
+			if len(parts) > 3 {
+				v, _ := strconv.Atoi(parts[3])
+				v32 := int32(v)
+				cID = &v32
+			}
+			c.JSON(http.StatusConflict, gin.H{
+				"error":           "Saldo insuficiente en la caja",
+				"saldo_actual":    saldo,
+				"monto_requerido": monto,
+				"caja_id":         cID,
+			})
 			return
 		}
-	}
-	if input.CategoriaID == nil && input.Monto == nil && input.Descripcion == nil && input.CajaID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no hay campos para actualizar"})
-		return
-	}
-	// Determinar nuevos valores propuestos
-	newCatID := oldCat
-	if input.CategoriaID != nil {
-		newCatID = *input.CategoriaID
-	}
-	newMonto := oldMonto
-	if input.Monto != nil {
-		newMonto = *input.Monto
-	}
-	// Si nuevo tipo es EGRESO, validar saldo suficiente
-	var newCat models.Categoria
-	if err := DB.First(&newCat, newCatID).Error; err == nil {
-		if strings.ToUpper(newCat.Tipo) == "EGRESO" {
-			// Si cambia de caja, necesitamos saldo >= nuevo monto en la nueva caja
-			if cajaID != t.CajaID {
-				var nuevaCaja models.Caja
-				if err := DB.First(&nuevaCaja, cajaID).Error; err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo validar saldo de caja", "detalle": err.Error()})
-					return
-				}
-				if nuevaCaja.Saldo < newMonto {
-					c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja destino para actualizar el egreso", "saldo_actual": nuevaCaja.Saldo, "monto_requerido": newMonto, "caja_id": cajaID})
-					return
-				}
-			} else {
-				// Misma caja: sólo validar delta positivo
-				if newMonto > oldMonto {
-					delta := newMonto - oldMonto
-					var caja models.Caja
-					if err := DB.First(&caja, cajaID).Error; err != nil {
-						c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo validar saldo de caja", "detalle": err.Error()})
-						return
-					}
-					if caja.Saldo < delta {
-						c.JSON(http.StatusConflict, gin.H{"error": "Saldo insuficiente en la caja para aumentar el egreso", "saldo_actual": caja.Saldo, "incremento": delta, "caja_id": cajaID})
-						return
-					}
-				}
-			}
+		if errMsg == "transaccion no encontrada" {
+			c.JSON(http.StatusNotFound, gin.H{"error": errMsg})
+			return
 		}
-	}
-	// Construir mapa de actualizaciones
-	updates := map[string]interface{}{}
-	if input.CategoriaID != nil {
-		updates["categoria_id"] = *input.CategoriaID
-	}
-	if cajaID != t.CajaID {
-		updates["caja_id"] = cajaID
-	}
-	if input.Monto != nil {
-		updates["monto"] = *input.Monto
-	}
-	if input.Descripcion != nil {
-		updates["descripcion"] = *input.Descripcion
-	}
-	log.Printf("[DEBUG] UpdateTransaccion updates map: %v", updates)
-	res := DB.Debug().Model(&t).Updates(updates)
-	if res.Error != nil {
-		log.Printf("[DEBUG] UpdateTransaccion error: %v", res.Error)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": res.Error.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	log.Printf("[DEBUG] UpdateTransaccion RowsAffected=%d", res.RowsAffected)
-	// recargar la transacción actualizada
-	if err := DB.First(&t, t.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo recargar transaccion", "detalle": err.Error()})
-		return
-	}
-	// Actualizar el usuario en el último log de UPDATE generado por el trigger
-	var lastLogID int64
-	err := DB.Raw("SELECT id FROM transacciones_log WHERE transaccion_id = ? AND accion = 'UPDATE' ORDER BY id DESC LIMIT 1", t.ID).Scan(&lastLogID).Error
-	if err == nil && lastLogID > 0 {
-		if execRes := DB.Exec("UPDATE transacciones_log SET usuario = ? WHERE id = ?", usuario, lastLogID); execRes.Error != nil {
-			log.Printf("[DEBUG] UpdateTransaccion update log error: %v", execRes.Error)
-		}
-	}
-	var lines []string
-	if t.CategoriaID != oldCat {
-		var cat models.Categoria
-		DB.First(&cat, t.CategoriaID)
-		emoji := tipoEmoji(cat.Tipo)
-		lines = append(lines, fmt.Sprintf("📚 *Categoria:* %s", cat.Nombre))
-		lines = append(lines, fmt.Sprintf("🏷️ *Tipo de movimiento:* %s %s", cat.Tipo, emoji))
-	}
-	if t.Monto != oldMonto {
-		lines = append(lines, fmt.Sprintf("💲*Monto:* %s", formatMonto(t.Monto)))
-	}
-	if t.Descripcion != oldDesc {
-		lines = append(lines, fmt.Sprintf("📄 *Descripcion:* %s", t.Descripcion))
-	}
-	if len(lines) > 0 {
-		msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n%s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", t.ID, strings.Join(lines, "\n"), labelCaja(cajaID), usuario)
-		notify.SendText(msg)
-	}
-	c.JSON(http.StatusOK, t)
+
+	// Notificación
+	msg := fmt.Sprintf("*TRANSACCION ACTUALIZADA*\n📪 *ID:* %d\n📄 *Desc:* %s\n💰 *Monto:* %s\n👤 *Por:* %s", updatedT.ID, updatedT.Descripcion, formatMonto(updatedT.Monto), usuario)
+	notify.SendText(msg)
+
+	c.JSON(http.StatusOK, updatedT)
 }
 
 // DeleteTransaccion godoc
@@ -531,32 +662,84 @@ func DeleteTransaccion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "parametro 'usuario' es requerido"})
 		return
 	}
+
 	var t models.Transaccion
-	if err := DB.First(&t, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+	var cajaID int32
+	var monto float64
+	var desc string
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Obtener Transacción
+		if err := tx.First(&t, id).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("transaccion no encontrada")
+			}
+			return err
+		}
+		cajaID = t.CajaID
+		monto = t.Monto
+		desc = t.Descripcion
+
+		// 2. Obtener Categoría para saber tipo
+		var cat models.Categoria
+		if err := tx.First(&cat, t.CategoriaID).Error; err != nil {
+			// Si no existe categoria, asumimos neutro? Mejor fallar
+			return fmt.Errorf("categoria de la transaccion no encontrada")
+		}
+
+		// 3. Obtener Caja
+		var caja models.Caja
+		if err := tx.First(&caja, cajaID).Error; err != nil {
+			return fmt.Errorf("caja no encontrada")
+		}
+
+		// 4. Revertir Saldo
+		// Si era INGRESO -> Restamos
+		// Si era EGRESO -> Sumamos
+		saldoAntes := caja.Saldo
+		var newSaldo float64
+		if strings.ToUpper(cat.Tipo) == "EGRESO" {
+			newSaldo = caja.Saldo + monto
+		} else {
+			// INGRESO
+			newSaldo = caja.Saldo - monto
+		}
+
+		if err := tx.Model(&caja).Update("saldo", newSaldo).Error; err != nil {
+			return err
+		}
+
+		// 5. Generar Log antes de borrar (Audit trail)
+		logEntry := models.TransaccionLog{
+			TransaccionID: t.ID,
+			Accion:        "DELETE",
+			Usuario:       usuario,
+			Detalle:       fmt.Sprintf("Borrado de %s por %s", t.Descripcion, formatMonto(t.Monto)),
+			SaldoAntes:    saldoAntes,
+			SaldoDespues:  newSaldo,
+		}
+		if err := tx.Create(&logEntry).Error; err != nil {
+			return err
+		}
+
+		// 6. Borrar Transacción
+		if err := tx.Delete(&t).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		if err.Error() == "transaccion no encontrada" {
 			c.JSON(http.StatusNotFound, gin.H{"error": "transaccion no encontrada"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Datos antes de borrar
-	desc := t.Descripcion
-	monto := t.Monto
-	cajaID := t.CajaID
-	// borrar
-	if err := DB.Delete(&models.Transaccion{}, t.ID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	// Actualizar el usuario en el último log de DELETE generado por el trigger
-	var lastLogID int64
-	err2 := DB.Raw("SELECT id FROM transacciones_log WHERE transaccion_id = ? AND accion = 'DELETE' ORDER BY id DESC LIMIT 1", t.ID).Scan(&lastLogID).Error
-	if err2 == nil && lastLogID > 0 {
-		if execRes := DB.Exec("UPDATE transacciones_log SET usuario = ? WHERE id = ?", usuario, lastLogID); execRes.Error != nil {
-			log.Printf("[DEBUG] DeleteTransaccion update log error: %v", execRes.Error)
-		}
-	}
+
+	// Logs generados explícitamente, no necesitamos updates manuales.
 	msg := fmt.Sprintf("*TRANSACCION ELIMINADA*\n📪 *ID:* %s\n📄 *Descripcion:* %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", id, desc, formatMonto(monto), labelCaja(cajaID), usuario)
 	notify.SendText(msg)
 	c.Status(http.StatusNoContent)
@@ -665,11 +848,45 @@ func GetTransaccionesLog(c *gin.Context) {
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/resumen [get]
 func GetResumenFinanciero(c *gin.Context) {
-	var resumen map[string]interface{}
-	if err := DB.Raw("SELECT * FROM resumen_financiero").Scan(&resumen).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
+	// Cálculo en tiempo real (Code-First)
+	var totalIngresos float64
+	var totalEgresos float64
+	var count int64
+
+	// 1. Calcular Ingresos/Egresos desde Transacciones
+	// Join con Categorias para filtrar por Tipo
+	DB.Model(&models.Transaccion{}).
+		Joins("JOIN categorias ON categorias.id = transacciones.categoria_id").
+		Where("categorias.tipo = ?", "INGRESO").
+		Select("COALESCE(SUM(monto), 0)").Scan(&totalIngresos)
+
+	DB.Model(&models.Transaccion{}).
+		Joins("JOIN categorias ON categorias.id = transacciones.categoria_id").
+		Where("categorias.tipo = ?", "EGRESO").
+		Select("COALESCE(SUM(monto), 0)").Scan(&totalEgresos)
+
+	DB.Model(&models.Transaccion{}).Count(&count)
+
+	// 2. Obtener Saldo Actual de Cajas
+	var caja1, caja2 models.Caja
+	var saldoCaja1, saldoCaja2 float64
+	if err := DB.First(&caja1, 1).Error; err == nil {
+		saldoCaja1 = caja1.Saldo
 	}
+	if err := DB.First(&caja2, 2).Error; err == nil {
+		saldoCaja2 = caja2.Saldo
+	}
+
+	resumen := gin.H{
+		"total_ingresos":      totalIngresos,
+		"total_egresos":       totalEgresos,
+		"saldo_actual":        saldoCaja1 + saldoCaja2, // Total global
+		"saldo_efectivo":      saldoCaja1,
+		"saldo_banco":         saldoCaja2,
+		"total_transacciones": count,
+		"neto_periodo":        totalIngresos - totalEgresos, // Diferencia simple
+	}
+
 	c.JSON(http.StatusOK, resumen)
 }
 
@@ -681,22 +898,34 @@ func GetResumenFinanciero(c *gin.Context) {
 // @Failure 500 {object} map[string]interface{}
 // @Router /api/limpiar [post]
 func DeleteAllData(c *gin.Context) {
-	errTx := DB.Exec("DELETE FROM transacciones").Error
-	errLog := DB.Exec("DELETE FROM transacciones_log").Error
-	errCaja := DB.Exec("UPDATE caja SET saldo = 0").Error
-	errCat := DB.Exec("DELETE FROM categorias").Error
+	// GORM requiere una condición para deletes masivos por seguridad (AllowGlobalUpdate)
+	// O simplemente usamos Where("1 = 1")
 
-	if errTx != nil || errLog != nil || errCaja != nil || errCat != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":         "Error al limpiar la base de datos",
-			"transacciones": errTx,
-			"logs":          errLog,
-			"caja":          errCaja,
-			"categorias":    errCat,
-		})
+	// Borrar hijos primero (Logs)
+	if err := DB.Where("1 = 1").Delete(&models.TransaccionLog{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error borrando logs", "detalle": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "Base de datos limpiada correctamente"})
+
+	// Borrar padre (Transacciones)
+	if err := DB.Where("1 = 1").Delete(&models.Transaccion{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error borrando transacciones", "detalle": err.Error()})
+		return
+	}
+
+	// Resetear Cajas
+	if err := DB.Model(&models.Caja{}).Where("1 = 1").Update("saldo", 0).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error reseteando cajas", "detalle": err.Error()})
+		return
+	}
+
+	// Borrar Categorias
+	if err := DB.Where("1 = 1").Delete(&models.Categoria{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error borrando categorias", "detalle": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "Base de datos limpiada y reseteada (Code-First)"})
 }
 
 // Helpers de formato
@@ -733,7 +962,7 @@ func tipoEmoji(tipo string) string {
 
 // labelCaja devuelve una etiqueta amigable para la caja según su ID.
 // 1 -> Efectivo, 2 -> Cuenta bancaria, cualquier otro -> "Caja <id>"
-func labelCaja(id uint) string {
+func labelCaja(id int32) string {
 	switch id {
 	case 1:
 		return "Efectivo"
@@ -770,7 +999,7 @@ type cashOutRequest struct {
 	CategoryName string  `json:"category_name" binding:"required"`
 	Reason       string  `json:"reason" binding:"required"`
 	Usuario      string  `json:"usuario"`
-	CategoriaID  uint    `json:"categoria_id,omitempty"`
+	CategoriaID  int32   `json:"categoria_id,omitempty"`
 }
 
 // OdooCashOut godoc
@@ -857,28 +1086,69 @@ func OdooCashOut(c *gin.Context) {
 
 		// Si categoria_id == 16 (Efectivos Puntos de Venta), crear ingreso interno en caja_id=1
 		if req.CategoriaID == 16 {
-			const transferCatID uint = 16
-			var catRec models.Categoria
-			if err := DB.First(&catRec, transferCatID).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de transferencia (ID 16) no existe", "detalle": err.Error()})
+			const transferCatID int32 = 16
+			const cajaID int32 = 1
+
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				var catRec models.Categoria
+				// Ensure category 16 exists or create it
+				if err := tx.FirstOrCreate(&catRec, models.Categoria{ID: 16, Nombre: "Efectivos Puntos de Venta", Tipo: "INGRESO"}).Error; err != nil {
+					return fmt.Errorf("error asegurando categoria 16: %w", err)
+				}
+
+				// Bloquear y obtener caja
+				var caja models.Caja
+				if err := tx.First(&caja, cajaID).Error; err != nil {
+					return fmt.Errorf("caja 1 no encontrada: %w", err)
+				}
+
+				desc := fmt.Sprintf("%s: %s", strings.ReplaceAll(req.POSName, "_", " "), req.Reason)
+				t := models.Transaccion{
+					CategoriaID: transferCatID,
+					CajaID:      cajaID,
+					Monto:       req.Amount,
+					Descripcion: desc,
+					Usuario:     usuario,
+				}
+				if err := tx.Create(&t).Error; err != nil {
+					return err
+				}
+
+				// Actualizar saldo
+				saldoAntes := caja.Saldo
+				newSaldo := caja.Saldo + req.Amount
+				if err := tx.Model(&caja).Update("saldo", newSaldo).Error; err != nil {
+					return err
+				}
+
+				// Log
+				logEntry := models.TransaccionLog{
+					TransaccionID: t.ID,
+					Accion:        "INSERT",
+					Usuario:       usuario,
+					Detalle:       fmt.Sprintf("Creación autom. por POS %s: %s", req.POSName, formatMonto(req.Amount)),
+					SaldoAntes:    saldoAntes,
+					SaldoDespues:  newSaldo,
+				}
+				if err := tx.Create(&logEntry).Error; err != nil {
+					return err
+				}
+
+				// Notificar variable para uso fuera del tx si se requiere, pero aquí enviamos msg dentro
+				emoji := tipoEmoji(catRec.Tipo)
+				globalMsg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", t.ID, t.Descripcion, catRec.Nombre, catRec.Tipo, emoji, formatMonto(t.Monto), labelCaja(t.CajaID), t.Usuario)
+
+				// Hack: enviamos notificación aquí o retornamos para enviarla fuera.
+				// Como es asíncrono el send, está bien lanzarlo.
+				notify.SendText(globalMsg)
+
+				return nil
+			})
+
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "fallo transacción interna POS", "detalle": err.Error()})
 				return
 			}
-			desc := fmt.Sprintf("%s: %s", strings.ReplaceAll(req.POSName, "_", " "), req.Reason)
-			t := models.Transaccion{
-				CategoriaID: transferCatID,
-				CajaID:      1,
-				Monto:       req.Amount,
-				Descripcion: desc,
-				Usuario:     usuario,
-			}
-			if err := DB.Create(&t).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudo crear transaccion interna", "detalle": err.Error()})
-				return
-			}
-			// Notificar transacción al chat "atm" (SendText ya usa 'atm')
-			emoji := tipoEmoji(catRec.Tipo)
-			msg := fmt.Sprintf("*TRANSACCION CREADA*\n📪 *ID:* %d\n📄 *Descripcion:* %s\n📚 *Categoria:* %s\n🏷️ *Tipo de movimiento:* %s %s\n💲*Monto:* %s\n🧾 *Caja:* %s\n👤 *Usuario:* %s", t.ID, t.Descripcion, catRec.Nombre, catRec.Tipo, emoji, formatMonto(t.Monto), labelCaja(t.CajaID), t.Usuario)
-			notify.SendText(msg)
 		}
 	}
 	c.JSON(http.StatusOK, res)
@@ -939,8 +1209,8 @@ func RetiroCuenta(c *gin.Context) {
 		return
 	}
 	// Categorías fijas: egreso=30, ingreso=20
-	const egresoCatID uint = 30
-	const ingresoCatID uint = 20
+	const egresoCatID int32 = 30
+	const ingresoCatID int32 = 20
 	var catEg models.Categoria
 	if err := DB.First(&catEg, egresoCatID).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "categoria de egreso (ID 30) no existe", "detalle": err.Error()})
@@ -976,6 +1246,16 @@ func RetiroCuenta(c *gin.Context) {
 	// Transacción atómica
 	var tEgreso, tIngreso models.Transaccion
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Refetch Caja 2 (Locking for update ideally)
+		var c2 models.Caja
+		if err := tx.First(&c2, 2).Error; err != nil {
+			return err
+		}
+		if c2.Saldo < req.Monto {
+			return fmt.Errorf("saldo_insuficiente")
+		}
+
+		// 2. Transacción de Egreso (Caja 2)
 		tEgreso = models.Transaccion{
 			CategoriaID: egresoCatID,
 			CajaID:      2,
@@ -986,6 +1266,27 @@ func RetiroCuenta(c *gin.Context) {
 		if err := tx.Create(&tEgreso).Error; err != nil {
 			return err
 		}
+
+		// 2.1 Actualizar Saldo Caja 2
+		newSaldo2 := c2.Saldo - req.Monto
+		if err := tx.Model(&models.Caja{}).Where("id = ?", 2).Update("saldo", newSaldo2).Error; err != nil {
+			return err
+		}
+
+		// 2.2 Log Egreso
+		logEgreso := models.TransaccionLog{
+			TransaccionID: tEgreso.ID,
+			Accion:        "INSERT",
+			Usuario:       req.Usuario,
+			Detalle:       fmt.Sprintf("Egreso automático por retiro de banco: %s", formatMonto(req.Monto)),
+			SaldoAntes:    c2.Saldo,
+			SaldoDespues:  newSaldo2,
+		}
+		if err := tx.Create(&logEgreso).Error; err != nil {
+			return err
+		}
+
+		// 3. Transacción de Ingreso (Caja 1)
 		tIngreso = models.Transaccion{
 			CategoriaID: ingresoCatID,
 			CajaID:      1,
@@ -996,6 +1297,32 @@ func RetiroCuenta(c *gin.Context) {
 		if err := tx.Create(&tIngreso).Error; err != nil {
 			return err
 		}
+
+		// 3.1 Obtener Caja 1
+		var c1 models.Caja
+		if err := tx.First(&c1, 1).Error; err != nil {
+			return err
+		}
+
+		// 3.2 Actualizar Saldo Caja 1
+		newSaldo1 := c1.Saldo + req.Monto
+		if err := tx.Model(&models.Caja{}).Where("id = ?", 1).Update("saldo", newSaldo1).Error; err != nil {
+			return err
+		}
+
+		// 3.3 Log Ingreso
+		logIngreso := models.TransaccionLog{
+			TransaccionID: tIngreso.ID,
+			Accion:        "INSERT",
+			Usuario:       req.Usuario,
+			Detalle:       fmt.Sprintf("Ingreso automático por retiro de banco: %s", formatMonto(req.Monto)),
+			SaldoAntes:    c1.Saldo,
+			SaldoDespues:  newSaldo1,
+		}
+		if err := tx.Create(&logIngreso).Error; err != nil {
+			return err
+		}
+
 		return nil
 	})
 	if err != nil {

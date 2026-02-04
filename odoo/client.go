@@ -432,3 +432,120 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-7] + "[...]"
 }
+
+// EmployeeStruct para mapear respuesta de hr.employee
+type OdooEmployee struct {
+	ID    int         `json:"id"`
+	Name  string      `json:"name"`
+	Pin   interface{} `json:"pin"`    // Puede venir string o false/null
+	JobID interface{} `json:"job_id"` // [id, name] o false
+}
+
+// SyncEmployees obtiene empleados de Odoo para sincronizar usuarios
+func (c *Client) FetchEmployees() ([]OdooEmployee, error) {
+	// Buscar empleados activos
+	domain := []interface{}{}
+	fields := []string{"id", "name", "pin", "job_id"} // pin es usado como contraseña
+	kwargs := map[string]interface{}{"domain": domain, "fields": fields}
+
+	// Usamos hr.employee
+	raw, err := c.callOdoo("hr.employee", "search_read", []interface{}{}, kwargs)
+	if err != nil {
+		return nil, fmt.Errorf("employee search: %w", err)
+	}
+
+	var employees []OdooEmployee
+	// Odoo devuelve un array de objetos
+	if err := json.Unmarshal(raw, &employees); err != nil {
+		return nil, fmt.Errorf("employee decode: %w", err)
+	}
+
+	return employees, nil
+}
+
+// POSSessionShort estructura para listado de sesiones en wizard
+type POSSessionShort struct {
+	ID       int       `json:"id"`
+	Name     string    `json:"name"`
+	StartAt  time.Time `json:"start_at"`
+	StopAt   time.Time `json:"stop_at"`
+	State    string    `json:"state"`
+	ConfigID []any     `json:"config_id"`
+}
+
+// GetPOSSessions busca sesiones de un POS específico en un rango de fechas
+func (c *Client) GetPOSSessions(posID int, start, end time.Time) ([]POSSessionShort, error) {
+	// domain: [['config_id', '=', posID], ['start_at', '>=', start], ['start_at', '<=', end]]
+	// Odoo dates are UTC string. We'll pass string to keep it simple or let Odoo handle it?
+	// Odoo expects "%Y-%m-%d %H:%M:%S" usually.
+	layout := "2006-01-02 15:04:05"
+	sStr := start.UTC().Format(layout)
+	eStr := end.UTC().Format(layout)
+
+	domain := []any{
+		[]any{"config_id", "=", posID},
+		[]any{"start_at", ">=", sStr},
+		[]any{"start_at", "<=", eStr},
+	}
+
+	fields := []string{"id", "name", "start_at", "stop_at", "state", "config_id"}
+	kwargs := map[string]any{"domain": domain, "fields": fields, "order": "start_at asc"}
+
+	raw, err := c.callOdoo("pos.session", "search_read", []any{}, kwargs)
+	if err != nil {
+		return nil, fmt.Errorf("search sessions: %w", err)
+	}
+
+	var results []map[string]any
+	if err := json.Unmarshal(raw, &results); err != nil {
+		return nil, fmt.Errorf("decode sessions: %w", err)
+	}
+
+	var sessions []POSSessionShort
+	for _, r := range results {
+		var s POSSessionShort
+		if id, ok := r["id"].(float64); ok {
+			s.ID = int(id)
+		}
+		if name, ok := r["name"].(string); ok {
+			s.Name = name
+		}
+		if cfg, ok := r["config_id"].([]any); ok {
+			s.ConfigID = cfg
+		}
+		if st, ok := r["state"].(string); ok {
+			s.State = st
+		}
+
+		// Parse dates (Odoo sends string UTC)
+		if startStr, ok := r["start_at"].(string); ok && startStr != "" {
+			if t, err := time.Parse(layout, startStr); err == nil {
+				s.StartAt = t
+			}
+		}
+		if stopStr, ok := r["stop_at"].(string); ok && stopStr != "" {
+			if t, err := time.Parse(layout, stopStr); err == nil {
+				s.StopAt = t
+			}
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, nil
+
+}
+
+func (c *Client) ListPOSConfigs() ([]map[string]any, error) {
+	// Simple list of ID, Name for selection
+	domain := []any{}
+	fields := []string{"id", "name"}
+	kwargs := map[string]any{"domain": domain, "fields": fields}
+
+	raw, err := c.callOdoo("pos.config", "search_read", []any{}, kwargs)
+	if err != nil {
+		return nil, err
+	}
+
+	var res []map[string]any
+	json.Unmarshal(raw, &res)
+	return res, nil
+}

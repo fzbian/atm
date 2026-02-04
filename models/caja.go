@@ -4,7 +4,7 @@ import "time"
 
 // Caja representa la tabla caja
 type Caja struct {
-	ID                  uint      `gorm:"primaryKey" json:"id"`
+	ID                  int32     `gorm:"primaryKey;type:int" json:"id"`
 	Saldo               float64   `gorm:"type:decimal(15,2);not null" json:"saldo"`
 	UltimaActualizacion time.Time `gorm:"column:ultima_actualizacion;autoUpdateTime" json:"ultima_actualizacion"`
 }

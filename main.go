@@ -68,9 +68,14 @@ func main() {
 		controllers.RegisterOdooRoutes(api)
 		controllers.RegisterCuentaRoutes(api)
 		controllers.RegisterLimpiarRoutes(api)
+		controllers.RegisterGastosRoutes(api)
+		controllers.RegisterUserRoutes(api)
+		controllers.RegisterConfigRoutes(api)
+		controllers.RegisterNominaRoutes(api)
 	}
 
 	// Swagger UI en /swagger/index.html
+	r.Static("/uploads", "./uploads")
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	// endpoint health

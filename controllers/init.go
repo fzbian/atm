@@ -92,3 +92,34 @@ func RegisterLimpiarRoutes(rg *gin.RouterGroup) {
 		r.POST("", DeleteAllData)
 	}
 }
+
+// RegisterGastosRoutes registra rutas de gastos operativos
+func RegisterGastosRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/gastos")
+	{
+		r.POST("", CreateGasto)
+		r.GET("", GetGastos)
+	}
+}
+
+// RegisterNominaRoutes registra rutas de nómina
+func RegisterNominaRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/nomina")
+	{
+		r.GET("/config", GetNominaConfig)
+		r.POST("/config", UpdateNominaConfig)
+		r.GET("/employees", GetNominaEmployees)
+		r.POST("/employees/:id/salary", UpdateEmployeeDetails)
+		r.POST("/pay", GeneratePayment)
+		r.POST("/payments/:id/sign", UploadSignedContract)
+		r.DELETE("/payments/:id", DeleteNominaPayment)
+		r.GET("/history", GetNominaHistory)
+
+		// Odoo Helpers for Wizard
+		r.GET("/odoo/pos", GetOdooPOSConfigs)
+		r.GET("/odoo/sessions", GetOdooSessions)
+
+		// Matrix Report
+		r.GET("/matrix", GetNominaMatrix)
+	}
+}
