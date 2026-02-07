@@ -99,14 +99,26 @@ func CreateGasto(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"message": "Gasto registrado exitosamente", "id": gasto.ID})
 }
 
-// GetGastos lista los gastos, opcionalmente filtrados por local
+// GetGastos lista los gastos, opcionalmente filtrados por local y rango de fechas
 func GetGastos(c *gin.Context) {
 	local := c.Query("local")
+	from := c.Query("from")
+	to := c.Query("to")
+
 	var gastos []models.GastoLocal
 
 	q := DB.Model(&models.GastoLocal{})
+
 	if local != "" {
 		q = q.Where("local = ?", local)
+	}
+
+	if from != "" {
+		// Asumimos formato compatible con SQL o RFC3339
+		q = q.Where("fecha >= ?", from)
+	}
+	if to != "" {
+		q = q.Where("fecha <= ?", to)
 	}
 
 	if err := q.Order("fecha desc").Find(&gastos).Error; err != nil {
@@ -115,4 +127,18 @@ func GetGastos(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gastos)
+}
+
+// DeleteGasto elimina un gasto local por ID
+func DeleteGasto(c *gin.Context) {
+	id := c.Param("id")
+	// Soft delete or hard delete? models.GastoLocal doesn't seem to have DeletedAt (gorm.Model).
+	// Let's check model definition in database.go? No, I saw models/gasto.go in step 3639.
+	// It has ID, Local, Fecha... No gorm.Model.
+	// So it's a HARD DELETE.
+	if err := DB.Delete(&models.GastoLocal{}, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "fallo al eliminar gasto", "detalle": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Gasto eliminado"})
 }

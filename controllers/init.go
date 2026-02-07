@@ -74,6 +74,20 @@ func RegisterOdooRoutes(rg *gin.RouterGroup) {
 	{
 		r.POST("/cashout", OdooCashOut)
 		r.GET("/pos", OdooListPOS)
+		r.GET("/billing", OdooGetBilling)
+	}
+}
+
+// RegisterBillingRoutes registra rutas del módulo de informes de facturación
+func RegisterBillingRoutes(rg *gin.RouterGroup) {
+	r := rg.Group("/billing")
+	{
+		r.GET("/monthly", GetBillingMonthly)
+		r.POST("/monthly", SaveBillingMonthly)
+		r.GET("/gastos", GetBillingGastos)
+		r.POST("/gastos", CreateBillingGasto)
+		r.GET("/configs", GetBillingConfigs)
+		r.POST("/configs", SaveBillingConfigs)
 	}
 }
 
@@ -99,6 +113,7 @@ func RegisterGastosRoutes(rg *gin.RouterGroup) {
 	{
 		r.POST("", CreateGasto)
 		r.GET("", GetGastos)
+		r.DELETE(":id", DeleteGasto)
 	}
 }
 

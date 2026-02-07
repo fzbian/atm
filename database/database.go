@@ -2,10 +2,12 @@ package database
 
 import (
 	"atm/models"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"gorm.io/driver/mysql"
@@ -52,29 +54,35 @@ func Connect() (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to db: %w", err)
 	}
 
-	// Code-First Migration
-	log.Println("[DB] Ejecutando migraciones automáticas...")
-	if err = db.AutoMigrate(
-		&models.Caja{},
-		&models.Categoria{},
-		&models.Transaccion{},
-		&models.TransaccionLog{},
-		&models.GastoLocal{},
-		&models.RoleConfig{},
-		&models.User{},
-		&models.NominaConfig{},
-		&models.UserPayroll{},
-		&models.NominaPayment{},
-	); err != nil {
-		return nil, fmt.Errorf("fallo migracion automatica: %w", err)
-	}
-
-	// Seeding
-	go func() {
-		if err := Seed(db); err != nil {
-			log.Printf("[DB] Error en seeding: %v", err)
+	// Code-First Migration (skip if DB_SKIP_MIGRATIONS=1 for faster dev cycles)
+	if os.Getenv("DB_SKIP_MIGRATIONS") == "1" {
+		log.Println("[DB] DB_SKIP_MIGRATIONS=1 -> saltando migraciones y seeding")
+	} else {
+		log.Println("[DB] Ejecutando migraciones automáticas...")
+		if err = db.AutoMigrate(
+			&models.Caja{},
+			&models.Categoria{},
+			&models.Transaccion{},
+			&models.TransaccionLog{},
+			&models.GastoLocal{},
+			&models.RoleConfig{},
+			&models.User{},
+			&models.NominaConfig{},
+			&models.UserPayroll{},
+			&models.NominaPayment{},
+			&models.BillingMonthly{},
+			&models.BillingConfig{},
+		); err != nil {
+			return nil, fmt.Errorf("fallo migracion automatica: %w", err)
 		}
-	}()
+
+		// Seeding
+		go func() {
+			if err := Seed(db); err != nil {
+				log.Printf("[DB] Error en seeding: %v", err)
+			}
+		}()
+	}
 
 	return db, nil
 }
@@ -118,6 +126,38 @@ func Seed(db *gorm.DB) error {
 	cat16 := models.Categoria{ID: 16, Nombre: "Efectivos Puntos de Venta", Tipo: "INGRESO"}
 	if err := db.FirstOrCreate(&cat16, models.Categoria{ID: 16}).Error; err != nil {
 		log.Printf("[DB] Error asegurando categoria 16: %v", err)
+	}
+
+	// 3. Role Config (Admin)
+	var adminRole models.RoleConfig
+	if err := db.First(&adminRole, "role = ?", "admin").Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Create default admin
+			views := `["dashboard","movements","gastos","pedidos","wallet","payroll","reports","billing","cashout","cashout-bank","admin/users","admin/roles","admin/categories"]`
+			adminRole = models.RoleConfig{Role: "admin", Views: views}
+			if err := db.Create(&adminRole).Error; err != nil {
+				log.Printf("[DB] Error seeding admin role: %v", err)
+			}
+		}
+	} else {
+		if !strings.Contains(adminRole.Views, "billing") {
+			// Naive JSON array append
+			current := strings.TrimSpace(adminRole.Views)
+			if len(current) > 1 && strings.HasSuffix(current, "]") {
+				newViews := current[:len(current)-1]
+				if current == "[]" {
+					newViews += `"billing"]`
+				} else {
+					newViews += `,"billing"]`
+				}
+				adminRole.Views = newViews
+				if err := db.Save(&adminRole).Error; err != nil {
+					log.Printf("[DB] Error updating admin role views: %v", err)
+				} else {
+					log.Println("[DB] Admin role updated with billing view")
+				}
+			}
+		}
 	}
 
 	return nil

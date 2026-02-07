@@ -247,7 +247,11 @@ func jsonRPC[T any](ctx context.Context, baseURL, service, method string, args [
 		return err
 	}
 	if rr.Error != nil {
-		return errors.New(rr.Error.Message)
+		dataMsg := ""
+		if rr.Error.Data != nil {
+			dataMsg = fmt.Sprintf(" | Data: %+v", rr.Error.Data)
+		}
+		return fmt.Errorf("%s%s", rr.Error.Message, dataMsg)
 	}
 	*dest = rr.Result
 	return nil

@@ -1342,3 +1342,21 @@ func RetiroCuenta(c *gin.Context) {
 		"ingreso": tIngreso,
 	})
 }
+
+// OdooGetBilling obtiene la facturación mensual por punto de venta
+func OdooGetBilling(c *gin.Context) {
+	yearStr := c.DefaultQuery("year", strconv.Itoa(time.Now().Year()))
+	year, err := strconv.Atoi(yearStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Año inválido"})
+		return
+	}
+
+	res, err := odoo.GetMonthlyBilling(context.Background(), os.Getenv("ODOO_URL"), os.Getenv("ODOO_DB"), os.Getenv("ODOO_USER"), os.Getenv("ODOO_PASSWORD"), year)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
